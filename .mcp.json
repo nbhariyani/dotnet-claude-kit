@@ -1,17 +1,12 @@
 {
   "mcpServers": {
     "cwm-roslyn-navigator": {
-      "type": "stdio",
       "command": "dotnet",
       "args": [
         "run",
         "--project",
-        "./mcp/CWM.RoslynNavigator/CWM.RoslynNavigator.csproj",
-        "--",
-        "--solution",
-        "${workspaceFolder}"
-      ],
-      "description": "Token-efficient .NET codebase navigation via Roslyn semantic analysis"
+        "./mcp/CWM.RoslynNavigator/CWM.RoslynNavigator.csproj"
+      ]
     }
   }
 }

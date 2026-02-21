@@ -91,7 +91,7 @@ If signals point to different architectures:
 3. **Team familiarity matters** — A team experienced with CA will be more productive with CA than learning VSA, even if VSA is technically simpler
 4. **Compliance drives structure** — Regulatory requirements often force stricter boundaries (CA or DDD)
 
-## Architecture Summaries
+## Patterns
 
 ### Vertical Slice Architecture (VSA)
 

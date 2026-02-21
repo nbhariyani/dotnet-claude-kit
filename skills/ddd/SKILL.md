@@ -17,7 +17,7 @@ description: >
 2. **Value objects over primitives** — Replace primitive obsession with value objects. `Money`, `EmailAddress`, `OrderNumber` are not strings — they carry validation, equality, and behavior. Use C# records for immutable value objects.
 3. **Domain events decouple side effects** — When something meaningful happens in the domain (OrderPlaced, PaymentReceived), raise a domain event. Side effects (send email, update read model, notify another aggregate) subscribe to these events. The aggregate stays focused on its own rules.
 4. **Aggregate root is the sole entry point** — External code accesses an aggregate only through its root entity. Child entities are never loaded or modified independently. The root enforces all invariants for the entire aggregate.
-5. **Repositories persist aggregates, not entities** — One repository per aggregate root. The repository loads and saves the entire aggregate as a unit. No repository for child entities.
+5. **Repositories persist aggregates, not entities** — One repository per aggregate root. The repository loads and saves the entire aggregate as a unit. No repository for child entities. The Infrastructure implementation uses `DbContext` internally — this is a DDD tactical pattern for aggregate boundaries, not a generic CRUD wrapper.
 
 ## Patterns
 
@@ -210,11 +210,14 @@ public abstract class AggregateRoot : Entity
 
 public interface IDomainEvent : INotification
 {
-    DateTimeOffset OccurredAt => TimeProvider.System.GetUtcNow();
+    DateTimeOffset OccurredAt { get; }
 }
 
 // Domain/Orders/Events/OrderPlaced.cs
-public sealed record OrderPlaced(Guid OrderId, CustomerId CustomerId, DateTimeOffset PlacedAt) : IDomainEvent;
+public sealed record OrderPlaced(Guid OrderId, CustomerId CustomerId, DateTimeOffset PlacedAt) : IDomainEvent
+{
+    public DateTimeOffset OccurredAt => PlacedAt;
+}
 
 // Infrastructure/Persistence/AppDbContext.cs
 public override async Task<int> SaveChangesAsync(CancellationToken ct = default)

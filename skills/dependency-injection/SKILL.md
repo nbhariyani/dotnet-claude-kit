@@ -179,12 +179,12 @@ public class OrderService(IServiceProvider sp)
 {
     public async Task Process()
     {
-        var repo = sp.GetRequiredService<IOrderRepository>();
+        var db = sp.GetRequiredService<AppDbContext>();
     }
 }
 
 // GOOD — explicit constructor injection
-public class OrderService(IOrderRepository repository) { }
+public class OrderService(AppDbContext db) { }
 ```
 
 ### Don't Register Everything as Singleton

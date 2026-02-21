@@ -94,7 +94,7 @@ public class MinimumAgeRequirement(int minimumAge) : IAuthorizationRequirement
     public int MinimumAge => minimumAge;
 }
 
-public class MinimumAgeHandler : AuthorizationHandler<MinimumAgeRequirement>
+public class MinimumAgeHandler(TimeProvider clock) : AuthorizationHandler<MinimumAgeRequirement>
 {
     protected override Task HandleRequirementAsync(
         AuthorizationHandlerContext context,
@@ -103,7 +103,7 @@ public class MinimumAgeHandler : AuthorizationHandler<MinimumAgeRequirement>
         var dateOfBirthClaim = context.User.FindFirst("date_of_birth");
         if (dateOfBirthClaim is not null &&
             DateOnly.TryParse(dateOfBirthClaim.Value, out var dob) &&
-            dob.AddYears(requirement.MinimumAge) <= DateOnly.FromDateTime(DateTime.Today))
+            dob.AddYears(requirement.MinimumAge) <= DateOnly.FromDateTime(clock.GetUtcNow().DateTime))
         {
             context.Succeed(requirement);
         }
@@ -205,6 +205,19 @@ options.TokenValidationParameters = new TokenValidationParameters
     ValidateIssuer = false,      // DON'T
     ValidateAudience = false,    // DON'T
     ValidateLifetime = false,    // DEFINITELY DON'T
+};
+
+// GOOD — validate everything, set explicit values
+options.TokenValidationParameters = new TokenValidationParameters
+{
+    ValidateIssuer = true,
+    ValidateAudience = true,
+    ValidateLifetime = true,
+    ValidateIssuerSigningKey = true,
+    ValidIssuer = config["Jwt:Issuer"],
+    ValidAudience = config["Jwt:Audience"],
+    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Key"]!)),
+    ClockSkew = TimeSpan.Zero
 };
 ```
 
