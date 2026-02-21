@@ -196,6 +196,7 @@ Token-efficient codebase navigation via Roslyn semantic analysis. Instead of Cla
 | `find_overrides` | Find all overrides of virtual/abstract methods | Searching for `override` keyword |
 | `get_symbol_detail` | Full signature, params, XML docs | Reading entire source files |
 | `get_diagnostics` | Compiler warnings/errors | Running `dotnet build` and parsing |
+| `detect_antipatterns` | 10 .NET anti-pattern rules (async void, sync-over-async, new HttpClient, DateTime.Now, broad catch, logging interpolation, pragma without restore, missing CancellationToken, EF Core no-tracking) | Manual code review |
 
 The MCP server starts automatically via `.mcp.json`. No manual setup required.
 

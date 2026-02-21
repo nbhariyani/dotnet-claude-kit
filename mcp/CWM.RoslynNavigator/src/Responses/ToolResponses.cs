@@ -61,3 +61,14 @@ public record SymbolDetail(
     string? XmlDoc,
     string File,
     int Line);
+
+public record AntiPatternInfo(
+    string Id,
+    string Severity,
+    string Message,
+    string File,
+    int Line,
+    string Snippet,
+    string Suggestion);
+
+public record AntiPatternsResult(List<AntiPatternInfo> Violations, int Count, int TotalFound);
