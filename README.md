@@ -3,7 +3,7 @@
   <p align="center">
     <strong>Make Claude Code an expert .NET developer.</strong>
     <br />
-    22 skills &bull; 8 specialist agents &bull; 5 project templates &bull; Roslyn MCP server
+    27 skills &bull; 8 specialist agents &bull; 5 project templates &bull; 15 MCP tools &bull; 6 hooks
     <br />
     Built for .NET 10 / C# 14. Architecture-aware. Token-efficient.
   </p>
@@ -12,8 +12,8 @@
 <p align="center">
   <a href="#installation">Installation</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
-  <a href="#what-you-get">What You Get</a> &bull;
-  <a href="#skills-20">Skills</a> &bull;
+  <a href="#what-makes-this-10x">10x Features</a> &bull;
+  <a href="#skills-27">Skills</a> &bull;
   <a href="#agents-8">Agents</a> &bull;
   <a href="#templates-5">Templates</a> &bull;
   <a href="#roslyn-mcp-server">MCP Server</a> &bull;
@@ -30,7 +30,7 @@ Claude Code is powerful, but out of the box it doesn't know **your** .NET conven
 
 ## What This Is
 
-A curated knowledge layer that sits between Claude Code and your .NET project. Drop a single `CLAUDE.md` into your repo and Claude instantly knows:
+A curated knowledge and action layer that sits between Claude Code and your .NET project. Drop a single `CLAUDE.md` into your repo and Claude instantly knows:
 
 - Which architecture fits your project (VSA, Clean Architecture, DDD, Modular Monolith)
 - How to write modern C# 14 with primary constructors, collection expressions, and records
@@ -38,8 +38,23 @@ A curated knowledge layer that sits between Claude Code and your .NET project. D
 - How to use EF Core without repository wrappers, with compiled queries and interceptors
 - How to test with `WebApplicationFactory` + `Testcontainers` instead of in-memory fakes
 - How to navigate your codebase via Roslyn semantic analysis instead of expensive file reads
+- **How to scaffold complete features, run health checks, review PRs, and enforce conventions**
 
 **No configuration. No setup wizards. Just copy one file and go.**
+
+## What Makes This 10x
+
+v0.4.0 adds an **action layer** on top of the knowledge layer — Claude doesn't just know the right patterns, it actively applies them:
+
+| Capability | What It Does |
+|-----------|-------------|
+| **Scaffolding** | One command → complete feature with endpoint, handler, validator, DTO, EF config, and tests. All 4 architectures supported. |
+| **Interactive Setup** | Guided project initialization: architecture questionnaire → tech stack selection → customized CLAUDE.md generation. |
+| **Health Check** | Automated codebase analysis using MCP tools: anti-pattern scan, diagnostics, dead code detection, test coverage → graded report card. |
+| **PR Review** | Multi-dimensional code review: anti-patterns, diagnostics, API surface changes, blast radius, architecture compliance, test coverage. |
+| **Convention Learning** | Detects project-specific patterns (naming, structure, modifiers) and enforces them in new code. Adapts to your codebase. |
+| **Smart Tools** | 15 Roslyn-powered MCP tools including dependency graphs, circular dependency detection, dead code finder, and test coverage mapping. |
+| **Active Hooks** | 6 hooks for automated quality: format on edit, anti-pattern checks on commit, test result analysis, structure validation. |
 
 ## Why dotnet-claude-kit?
 
@@ -136,7 +151,7 @@ public static class CreateOrder
 
 ---
 
-## Skills (22)
+## Skills (27)
 
 Code-heavy reference files that teach Claude .NET best practices. Each skill is under 400 lines with concrete code examples, anti-patterns (BAD/GOOD comparisons), and decision guides.
 
@@ -152,6 +167,7 @@ Code-heavy reference files that teach Claude .NET best practices. Each skill is 
 | **DevOps** | [docker](skills/docker/SKILL.md), [ci-cd](skills/ci-cd/SKILL.md), [aspire](skills/aspire/SKILL.md) | Multi-stage builds, GitHub Actions, .NET Aspire orchestration |
 | **Cross-cutting** | [dependency-injection](skills/dependency-injection/SKILL.md), [configuration](skills/configuration/SKILL.md) | Keyed services, Options pattern, secrets management |
 | **Workflow** | [workflow-mastery](skills/workflow-mastery/SKILL.md) | Parallel worktrees, plan mode strategy, verification loops, auto-format hooks, permission setup, subagent patterns |
+| **Workflows & Automation** | [scaffolding](skills/scaffolding/SKILL.md), [project-setup](skills/project-setup/SKILL.md), [code-review-workflow](skills/code-review-workflow/SKILL.md), [migration-workflow](skills/migration-workflow/SKILL.md), [convention-learner](skills/convention-learner/SKILL.md) | Feature scaffolding for all architectures, interactive project init, MCP-driven PR reviews, safe migration workflows, convention detection and enforcement |
 
 ## Agents (8)
 
@@ -159,14 +175,14 @@ Specialist agents that Claude routes queries to automatically. Each agent loads 
 
 | Agent | When It Activates | What It Does |
 |-------|-------------------|-------------|
-| [dotnet-architect](agents/dotnet-architect.md) | "set up project", "architecture", "choose architecture" | Runs the architecture questionnaire, recommends structure, shows complete examples |
+| [dotnet-architect](agents/dotnet-architect.md) | "set up project", "architecture", "scaffold feature", "init project" | Runs the architecture questionnaire, scaffolds features, initializes projects |
 | [api-designer](agents/api-designer.md) | "create endpoint", "OpenAPI", "versioning" | Designs minimal API endpoints with proper metadata, versioning, and auth |
-| [ef-core-specialist](agents/ef-core-specialist.md) | "database", "migration", "query", "DbContext" | Optimizes queries, configures entities, manages migrations |
+| [ef-core-specialist](agents/ef-core-specialist.md) | "database", "migration", "query", "DbContext" | Optimizes queries, configures entities, manages migrations safely |
 | [test-engineer](agents/test-engineer.md) | "write tests", "test strategy", "coverage" | Integration-first testing with real databases via Testcontainers |
 | [security-auditor](agents/security-auditor.md) | "security", "authentication", "JWT" | OWASP top 10, auth configuration, secrets management |
 | [performance-analyst](agents/performance-analyst.md) | "performance", "benchmark", "caching" | Identifies hot paths, configures HybridCache, async optimization |
 | [devops-engineer](agents/devops-engineer.md) | "Docker", "CI/CD", "Aspire", "deploy" | Multi-stage Dockerfiles, GitHub Actions pipelines, Aspire orchestration |
-| [code-reviewer](agents/code-reviewer.md) | "review this code", "PR review" | Multi-dimensional review: correctness, security, performance, conventions |
+| [code-reviewer](agents/code-reviewer.md) | "review this code", "PR review", "health check", "conventions" | MCP-driven multi-dimensional review, convention detection and enforcement |
 
 ## Templates (5)
 
@@ -189,14 +205,18 @@ Token-efficient codebase navigation via Roslyn semantic analysis. Instead of Cla
 | `find_symbol` | Locate type/method definitions | Grep/Glob across all .cs files |
 | `find_references` | Find all usages of a symbol | Grep for the type name |
 | `find_implementations` | Find interface implementors | Searching for `: IInterface` |
+| `find_callers` | Find all methods calling a method | Manual grep for method name |
+| `find_overrides` | Find overrides of virtual/abstract methods | Searching for `override` keyword |
 | `get_type_hierarchy` | Inheritance chain + interfaces | Reading multiple files |
 | `get_project_graph` | Solution dependency tree | Parsing .csproj files manually |
 | `get_public_api` | Public API without full file | Reading entire source files |
-| `find_callers` | Find all methods calling a method | Manual grep for method name |
-| `find_overrides` | Find all overrides of virtual/abstract methods | Searching for `override` keyword |
 | `get_symbol_detail` | Full signature, params, XML docs | Reading entire source files |
 | `get_diagnostics` | Compiler warnings/errors | Running `dotnet build` and parsing |
-| `detect_antipatterns` | 10 .NET anti-pattern rules (async void, sync-over-async, new HttpClient, DateTime.Now, broad catch, logging interpolation, pragma without restore, missing CancellationToken, EF Core no-tracking) | Manual code review |
+| `detect_antipatterns` | 10 .NET anti-pattern rules | Manual code review |
+| `find_dead_code` | Unused types, methods, properties | Manual inspection of all files |
+| `detect_circular_dependencies` | Project and type-level cycles | Manually tracing references |
+| `get_dependency_graph` | Method call chain visualization | Reading multiple files and tracing |
+| `get_test_coverage_map` | Heuristic test coverage mapping | Searching for test files manually |
 
 The MCP server starts automatically via `.mcp.json`. No manual setup required.
 
@@ -213,6 +233,19 @@ Living reference documents updated per .NET release:
 | [package-recommendations](knowledge/package-recommendations.md) | Vetted NuGet packages with rationale and "when NOT to use" |
 | [breaking-changes](knowledge/breaking-changes.md) | .NET migration gotchas |
 | [decisions/](knowledge/decisions/) | Architecture Decision Records explaining every default |
+
+## Hooks
+
+Automated workflow integration:
+
+| Hook | Event | What It Does |
+|------|-------|-------------|
+| `pre-commit-format.sh` | Pre-commit | `dotnet format --verify-no-changes` ensures consistent formatting |
+| `pre-commit-antipattern.sh` | Pre-commit | Detects DateTime.Now, async void, new HttpClient() in staged files |
+| `post-scaffold-restore.sh` | Post-file-edit (*.csproj) | `dotnet restore` after project file changes |
+| `post-edit-format.sh` | Post-file-edit (*.cs) | Auto-formats C# files after edits |
+| `post-test-analyze.sh` | Post-test | Parses test results and outputs actionable summary |
+| `pre-build-validate.sh` | Pre-build | Validates project structure (solution file, Directory.Build.props, test projects) |
 
 ## Defaults & Decisions
 
@@ -236,22 +269,15 @@ dotnet-claude-kit/
 ├── CLAUDE.md                    # Instructions for developing THIS repo
 ├── AGENTS.md                    # Agent routing & orchestration
 ├── agents/                      # 8 specialist agents
-├── skills/                      # 21 skills
+├── skills/                      # 27 skills
 ├── templates/                   # 5 drop-in CLAUDE.md templates
 ├── knowledge/                   # Living reference documents + ADRs
-├── mcp/CWM.RoslynNavigator/     # Roslyn MCP server
-├── hooks/                       # Claude Code hooks
+├── mcp/CWM.RoslynNavigator/     # Roslyn MCP server (15 tools)
+├── hooks/                       # 6 Claude Code hooks
 ├── .mcp.json                    # MCP server registration
 ├── .claude-plugin/              # Plugin marketplace manifests
 └── .github/workflows/           # CI validation
 ```
-
-## Hooks
-
-Automated workflow integration:
-
-- **Pre-commit** — `dotnet format --verify-no-changes` ensures consistent formatting
-- **Post-scaffold** — `dotnet restore` after `.csproj` changes
 
 ## Contributing
 

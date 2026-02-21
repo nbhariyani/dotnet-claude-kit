@@ -35,6 +35,12 @@ Match user intent to agent. When multiple agents could handle a query, the first
 | "Aspire", "orchestration", "service discovery" | devops-engineer | — |
 | "review this code", "PR review", "code quality" | code-reviewer | — |
 | "choose architecture", "which architecture", "architecture decision" | dotnet-architect | — |
+| "scaffold feature", "create feature", "add endpoint", "generate feature" | dotnet-architect | api-designer, ef-core-specialist |
+| "init project", "setup project", "new project", "generate CLAUDE.md" | dotnet-architect | — |
+| "health check", "analyze project", "project report" | code-reviewer | dotnet-architect |
+| "review PR", "review changes", "code review", "PR review" | code-reviewer | — |
+| "add migration", "ef migration", "update packages", "upgrade nuget" | ef-core-specialist | — |
+| "conventions", "coding style", "detect patterns", "code consistency" | code-reviewer | — |
 | "add feature" (architecture-appropriate) | dotnet-architect | api-designer, ef-core-specialist |
 | "refactor" | code-reviewer | dotnet-architect |
 
@@ -50,14 +56,14 @@ Agents load skills in dependency order. Core skills load first.
 
 | Agent | Skills |
 |-------|--------|
-| dotnet-architect | modern-csharp, architecture-advisor, project-structure + conditional: vertical-slice, clean-architecture, ddd |
+| dotnet-architect | modern-csharp, architecture-advisor, project-structure, scaffolding, project-setup + conditional: vertical-slice, clean-architecture, ddd |
 | api-designer | modern-csharp, minimal-api, api-versioning, authentication, error-handling |
-| ef-core-specialist | modern-csharp, ef-core, configuration |
+| ef-core-specialist | modern-csharp, ef-core, configuration, migration-workflow |
 | test-engineer | modern-csharp, testing |
 | security-auditor | modern-csharp, authentication, configuration |
 | performance-analyst | modern-csharp, caching |
 | devops-engineer | modern-csharp, docker, ci-cd, aspire |
-| code-reviewer | modern-csharp + contextual (loads relevant skills incl. clean-architecture, ddd based on files under review) |
+| code-reviewer | modern-csharp, code-review-workflow, convention-learner + contextual (loads relevant skills incl. clean-architecture, ddd based on files under review) |
 
 ## MCP Tool Preferences
 
@@ -72,6 +78,10 @@ Agents should **prefer Roslyn MCP tools over file scanning** to reduce token con
 | Understand project dependencies | `get_project_graph` | Parsing .csproj files manually |
 | Review a type's API surface | `get_public_api` | Reading the full source file |
 | Check for compilation errors | `get_diagnostics` | Running `dotnet build` and parsing output |
+| Find unused code for cleanup | `find_dead_code` | Manual inspection of all files |
+| Check for circular dependencies | `detect_circular_dependencies` | Manually tracing project references |
+| Understand method call chains | `get_dependency_graph` | Reading multiple files and tracing calls |
+| Check which types have tests | `get_test_coverage_map` | Manually searching for test files |
 
 ## Conflict Resolution
 

@@ -72,3 +72,23 @@ public record AntiPatternInfo(
     string Suggestion);
 
 public record AntiPatternsResult(List<AntiPatternInfo> Violations, int Count, int TotalFound);
+
+// Dead code detection
+public record DeadCodeInfo(string Name, string Kind, string File, int Line, string? ContainingType);
+
+public record DeadCodeResult(List<DeadCodeInfo> Symbols, int Count, int TotalFound);
+
+// Circular dependency detection
+public record CircularDependencyChain(List<string> Chain, string Level);
+
+public record CircularDependenciesResult(List<CircularDependencyChain> Cycles, int Count);
+
+// Dependency graph
+public record DependencyNode(string Symbol, string ContainingType, string File, int Line, int Depth);
+
+public record DependencyGraphResult(string RootSymbol, List<DependencyNode> Dependencies, int TotalNodes);
+
+// Test coverage map
+public record TestCoverageEntry(string Type, string File, bool HasTests, string? TestFile);
+
+public record TestCoverageMapResult(List<TestCoverageEntry> Coverage, int TotalTypes, int TestedTypes, int Percentage);

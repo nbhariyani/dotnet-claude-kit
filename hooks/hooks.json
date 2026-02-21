@@ -6,10 +6,31 @@
       "description": "Ensure code is formatted before commit"
     },
     {
+      "event": "pre-commit",
+      "command": "bash hooks/pre-commit-antipattern.sh",
+      "description": "Detect anti-patterns (DateTime.Now, async void, new HttpClient) in staged files"
+    },
+    {
       "event": "post-file-edit",
       "pattern": "*.csproj",
       "command": "bash hooks/post-scaffold-restore.sh",
       "description": "Auto-restore NuGet packages after project file changes"
+    },
+    {
+      "event": "post-file-edit",
+      "pattern": "*.cs",
+      "command": "bash hooks/post-edit-format.sh",
+      "description": "Auto-format C# files after edits"
+    },
+    {
+      "event": "post-test",
+      "command": "bash hooks/post-test-analyze.sh",
+      "description": "Analyze test results and output actionable summary"
+    },
+    {
+      "event": "pre-build",
+      "command": "bash hooks/pre-build-validate.sh",
+      "description": "Validate project structure matches expected architecture"
     }
   ]
 }
