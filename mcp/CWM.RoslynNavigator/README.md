@@ -23,25 +23,48 @@ CWM.RoslynNavigator is a Model Context Protocol (MCP) server that provides Claud
 | `get_public_api` | Public members of a type (without full file) | ~100 tokens vs 500+ for full file |
 | `get_diagnostics` | Compiler + analyzer warnings/errors | ~50-300 tokens |
 
-## Setup
+## Installation
 
-### Via .mcp.json (Recommended)
+### As a Global Tool (Recommended)
 
-The root `.mcp.json` registers this server automatically:
+```bash
+dotnet tool install -g CWM.RoslynNavigator
+```
+
+Then add to your project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "cwm-roslyn-navigator": {
-      "type": "stdio",
-      "command": "dotnet",
-      "args": ["run", "--project", "./mcp/CWM.RoslynNavigator/CWM.RoslynNavigator.csproj", "--", "--solution", "${workspaceFolder}"]
+      "command": "cwm-roslyn-navigator",
+      "args": ["--solution", "${workspaceFolder}"]
     }
   }
 }
 ```
 
-### Manual
+### As a Local Tool (per-repo)
+
+```bash
+dotnet new tool-manifest   # if you don't have one
+dotnet tool install CWM.RoslynNavigator
+```
+
+Then reference with `dotnet tool run`:
+
+```json
+{
+  "mcpServers": {
+    "cwm-roslyn-navigator": {
+      "command": "dotnet",
+      "args": ["tool", "run", "cwm-roslyn-navigator", "--", "--solution", "${workspaceFolder}"]
+    }
+  }
+}
+```
+
+### From Source (for contributors)
 
 ```bash
 dotnet run --project mcp/CWM.RoslynNavigator/CWM.RoslynNavigator.csproj -- --solution /path/to/your/Solution.sln

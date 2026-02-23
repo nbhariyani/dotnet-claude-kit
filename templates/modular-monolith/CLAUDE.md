@@ -168,8 +168,13 @@ Load these dotnet-claude-kit skills for context:
 - `configuration` — Options pattern, per-module configuration sections
 - `logging` — Serilog, structured logging, OpenTelemetry
 - `workflow-mastery` — Parallel worktrees, verification loops, subagent patterns
+- `self-correction-loop` — Capture corrections as permanent rules in MEMORY.md
+- `wrap-up-ritual` — Structured session handoff to `.claude/handoff.md`
+- `context-discipline` — Token budget management, MCP-first navigation
 
 ## MCP Tools
+
+> **Setup:** Install once globally with `dotnet tool install -g CWM.RoslynNavigator` and register with `claude mcp add --scope user cwm-roslyn-navigator -- cwm-roslyn-navigator --solution ${workspaceFolder}`. After that, these tools are available in every .NET project.
 
 Use `cwm-roslyn-navigator` tools to minimize token consumption:
 

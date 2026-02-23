@@ -3,7 +3,7 @@
   <p align="center">
     <strong>Make Claude Code an expert .NET developer.</strong>
     <br />
-    27 skills &bull; 8 specialist agents &bull; 5 project templates &bull; 15 MCP tools &bull; 6 hooks
+    40 skills &bull; 8 specialist agents &bull; 5 project templates &bull; 15 MCP tools &bull; 6 hooks
     <br />
     Built for .NET 10 / C# 14. Architecture-aware. Token-efficient.
   </p>
@@ -13,7 +13,7 @@
   <a href="#installation">Installation</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#what-makes-this-10x">10x Features</a> &bull;
-  <a href="#skills-27">Skills</a> &bull;
+  <a href="#skills-40">Skills</a> &bull;
   <a href="#agents-8">Agents</a> &bull;
   <a href="#templates-5">Templates</a> &bull;
   <a href="#roslyn-mcp-server">MCP Server</a> &bull;
@@ -71,23 +71,31 @@ v0.4.0 adds an **action layer** on top of the knowledge layer — Claude doesn't
 
 ## Installation
 
-### As a Claude Code Plugin (Recommended)
+### One-Time Global Setup
 
-```
-/plugin marketplace add codewithmukesh/dotnet-claude-kit
-/plugin install dotnet-claude-kit@dotnet-claude-kit
-```
-
-### Manual
+Install the Roslyn MCP server as a global tool and register it with Claude Code. Run once — works in every .NET project:
 
 ```bash
+# 1. Install the MCP server globally
+dotnet tool install -g CWM.RoslynNavigator
+
+# 2. Register it in Claude Code at user scope (available in ALL projects)
+claude mcp add --scope user cwm-roslyn-navigator -- cwm-roslyn-navigator --solution ${workspaceFolder}
+```
+
+### Per-Project Setup
+
+Copy the template that matches your project type into your project root:
+
+```bash
+# Clone the kit (or download just the template you need)
 git clone https://github.com/codewithmukesh/dotnet-claude-kit.git
+
+# Copy the right template
 cp dotnet-claude-kit/templates/web-api/CLAUDE.md ./your-project/CLAUDE.md
 ```
 
-## Quick Start
-
-**1. Pick a template** that matches your project type:
+### Available Templates
 
 ```bash
 cp templates/web-api/CLAUDE.md ./CLAUDE.md           # REST API
@@ -97,9 +105,7 @@ cp templates/worker-service/CLAUDE.md ./CLAUDE.md      # Background workers
 cp templates/class-library/CLAUDE.md ./CLAUDE.md       # NuGet packages
 ```
 
-**2. Customize** — Replace `[ProjectName]`, update tech stack, choose your architecture.
-
-**3. Start Claude Code** — Skills, agents, and the Roslyn MCP server activate automatically.
+Customize — replace `[ProjectName]`, update tech stack, choose your architecture. Start Claude Code — 40 skills, 8 agents, and 15 MCP tools activate automatically.
 
 That's it. Claude now writes .NET code the way a senior .NET engineer would.
 
@@ -151,7 +157,7 @@ public static class CreateOrder
 
 ---
 
-## Skills (27)
+## Skills (40)
 
 Code-heavy reference files that teach Claude .NET best practices. Each skill is under 400 lines with concrete code examples, anti-patterns (BAD/GOOD comparisons), and decision guides.
 
@@ -168,6 +174,7 @@ Code-heavy reference files that teach Claude .NET best practices. Each skill is 
 | **Cross-cutting** | [dependency-injection](skills/dependency-injection/SKILL.md), [configuration](skills/configuration/SKILL.md) | Keyed services, Options pattern, secrets management |
 | **Workflow** | [workflow-mastery](skills/workflow-mastery/SKILL.md) | Parallel worktrees, plan mode strategy, verification loops, auto-format hooks, permission setup, subagent patterns |
 | **Workflows & Automation** | [scaffolding](skills/scaffolding/SKILL.md), [project-setup](skills/project-setup/SKILL.md), [code-review-workflow](skills/code-review-workflow/SKILL.md), [migration-workflow](skills/migration-workflow/SKILL.md), [convention-learner](skills/convention-learner/SKILL.md) | Feature scaffolding for all architectures, interactive project init, MCP-driven PR reviews, safe migration workflows, convention detection and enforcement |
+| **Meta & Productivity** | [self-correction-loop](skills/self-correction-loop/SKILL.md), [wrap-up-ritual](skills/wrap-up-ritual/SKILL.md), [context-discipline](skills/context-discipline/SKILL.md), [model-selection](skills/model-selection/SKILL.md), [80-20-review](skills/80-20-review/SKILL.md), [split-memory](skills/split-memory/SKILL.md), [learning-log](skills/learning-log/SKILL.md) | Self-improving correction capture, structured session handoffs, token budget management, strategic model selection, focused code review, modular CLAUDE.md, insight documentation |
 
 ## Agents (8)
 
@@ -269,7 +276,7 @@ dotnet-claude-kit/
 ├── CLAUDE.md                    # Instructions for developing THIS repo
 ├── AGENTS.md                    # Agent routing & orchestration
 ├── agents/                      # 8 specialist agents
-├── skills/                      # 27 skills
+├── skills/                      # 40 skills
 ├── templates/                   # 5 drop-in CLAUDE.md templates
 ├── knowledge/                   # Living reference documents + ADRs
 ├── mcp/CWM.RoslynNavigator/     # Roslyn MCP server (15 tools)

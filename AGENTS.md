@@ -83,6 +83,32 @@ Agents should **prefer Roslyn MCP tools over file scanning** to reduce token con
 | Understand method call chains | `get_dependency_graph` | Reading multiple files and tracing calls |
 | Check which types have tests | `get_test_coverage_map` | Manually searching for test files |
 
+## Cross-Agent Meta Skills
+
+These 7 meta and productivity skills are not tied to a specific agent — any agent can load them when the context calls for it:
+
+| Skill | When to Load |
+|-------|-------------|
+| `self-correction-loop` | After ANY user correction — capture the rule in MEMORY.md |
+| `wrap-up-ritual` | User signals end of session — write handoff to `.claude/handoff.md` |
+| `context-discipline` | Context running low, large codebase navigation, planning exploration strategy |
+| `model-selection` | Choosing between Opus/Sonnet/Haiku, assigning subagent models |
+| `80-20-review` | Code review, PR review, deciding what to review in depth |
+| `split-memory` | CLAUDE.md exceeds 300 lines, need to split instructions across files |
+| `learning-log` | Non-obvious discovery during development — log the insight |
+
+### Meta Skill Routing
+
+| User Intent Pattern | Skill |
+|---|---|
+| "learn from mistakes", "remember this", "don't do that again" | self-correction-loop |
+| "wrap up", "done for today", "save progress", "handoff" | wrap-up-ritual |
+| "context", "running out of tokens", "too many files" | context-discipline |
+| "which model", "use Opus", "use Sonnet", "switch model" | model-selection |
+| "review this", "what should I review", "blast radius" | 80-20-review |
+| "split CLAUDE.md", "too long", "organize instructions" | split-memory |
+| "log this", "document this finding", "gotcha" | learning-log |
+
 ## Conflict Resolution
 
 When two agents could handle a query:
@@ -93,6 +119,8 @@ When two agents could handle a query:
 4. **Code review is holistic** — The code-reviewer loads skills contextually based on what's in the PR
 
 ## Token Budget Guidance
+
+For detailed context management strategies, see the **`context-discipline`** skill.
 
 - **Small queries** (single pattern/fix): Load 1-2 skills, use MCP tools for context
 - **Medium queries** (feature implementation): Load 3-4 skills, use MCP tools to understand existing code

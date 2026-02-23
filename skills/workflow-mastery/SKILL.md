@@ -20,7 +20,7 @@ description: >
 2. **Plan then execute** — For any non-trivial task, start in plan mode, iterate until the plan is bulletproof, then switch to auto-accept. A good plan means Claude 1-shots the implementation.
 3. **Verification closes the loop** — Give Claude a way to prove its work: `dotnet build`, `dotnet test`, `get_diagnostics` via MCP. This single practice 2-3x the quality of the output.
 4. **Automate the repetitive** — If you do it more than once a day, make it a hook, a slash command, or a subagent. Pre-allow safe permissions. Eliminate friction.
-5. **Compound your knowledge** — Every correction becomes a rule in CLAUDE.md. Every PR review adds a learning. Over time, Claude's mistake rate drops because your project's knowledge base grows.
+5. **Compound your knowledge** — Every correction becomes a rule in `MEMORY.md` (see `self-correction-loop` skill). Every PR review adds a learning. Over time, Claude's mistake rate drops because your project's knowledge base grows.
 
 ## Patterns
 
@@ -149,31 +149,9 @@ Do not tell me you're done until all 4 pass."
 
 This turns Claude from "write code and hope" into "write code, verify, iterate until green."
 
-### Compounding Knowledge via CLAUDE.md
+### Compounding Knowledge via Corrections
 
-After every correction, end with:
-
-```
-"Update the CLAUDE.md so you don't make that mistake again."
-```
-
-Claude is excellent at writing rules for itself. After a few sessions, your CLAUDE.md contains battle-tested .NET rules like:
-
-```markdown
-## Learned Rules
-- Never use `IMemoryCache` directly — always use `HybridCache`
-- Our OrderId is a strongly-typed ID, not a raw Guid
-- Integration tests must use the `ApiFixture` base class
-- The Catalog module publishes `ProductPriceChanged` — the Orders module must subscribe
-```
-
-**In code reviews:** Use `@.claude` on PRs (via the Claude Code GitHub Action) to add learnings directly:
-
-```
-nit: Use TimeProvider, not DateTime.UtcNow
-
-@claude add to CLAUDE.md: always use TimeProvider instead of DateTime
-```
+For the full correction capture system — detection, generalization, categorized storage, and periodic audits — see the **`self-correction-loop`** skill. The short version: after every correction, capture a generalized rule in `MEMORY.md` so the same mistake never recurs.
 
 ### Prompting Techniques for .NET
 
@@ -203,6 +181,8 @@ I want to verify the migration before applying it."
 ```
 
 ### Subagent Patterns for .NET
+
+> **Context-aware delegation:** For guidance on when to use subagents to manage token budgets effectively, see the **`context-discipline`** skill.
 
 Create reusable subagents in `.claude/agents/`:
 
