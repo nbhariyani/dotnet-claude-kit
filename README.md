@@ -75,14 +75,25 @@ v0.4.0 adds an **action layer** on top of the knowledge layer — Claude doesn't
 
 ### Plugin Install (Recommended)
 
-Install as a Claude Code plugin — all 47 skills, 10 agents, 15 commands, 9 rules, hooks, and MCP config activate globally and auto-update:
+Install as a Claude Code plugin — all 47 skills, 10 agents, 16 commands, 9 rules, hooks, and MCP config activate globally:
 
 ```bash
-# 1. Install the Roslyn MCP server as a global .NET tool
+# In your terminal — install the Roslyn MCP server
 dotnet tool install -g CWM.RoslynNavigator
+```
 
-# 2. Install the plugin
-/install-plugin codewithmukesh/dotnet-claude-kit
+Then inside a Claude Code session:
+
+```
+# Add the marketplace and install the plugin
+/plugin marketplace add codewithmukesh/dotnet-claude-kit
+/plugin install dotnet-claude-kit
+```
+
+**For local development/testing** (loads directly from disk, no install needed):
+
+```bash
+claude --plugin-dir /path/to/dotnet-claude-kit
 ```
 
 ### Per-Project Setup
@@ -135,8 +146,8 @@ claude mcp add --scope user cwm-roslyn-navigator -- cwm-roslyn-navigator --solut
 # 3. Clone the kit
 git clone https://github.com/codewithmukesh/dotnet-claude-kit.git
 
-# 4. Copy the right template into your project
-cp dotnet-claude-kit/templates/web-api/CLAUDE.md ./your-project/CLAUDE.md
+# 4. Load as a local plugin (or copy a template manually)
+claude --plugin-dir ./dotnet-claude-kit
 ```
 
 </details>
