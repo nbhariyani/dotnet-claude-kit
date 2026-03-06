@@ -114,49 +114,6 @@ EXAMPLES OF BAD LEARNINGS:
 - "Used TimeProvider" (already a known rule, not a learning)
 ```
 
-### Next-Session Quick Start
-
-The handoff file enables a fast start in the next session:
-
-```
-NEXT SESSION WORKFLOW:
-1. Claude reads .claude/handoff.md automatically
-2. Claude reads MEMORY.md for permanent rules
-3. Claude summarizes the current state:
-   "Last session completed X, Y, Z. Pending: A, B. Shall I continue with A?"
-4. User confirms or redirects
-5. Claude picks up exactly where the previous session left off
-
-This eliminates the "where were we?" problem entirely.
-```
-
-### Handoff for Different Developers
-
-When the next session might be a different person:
-
-```markdown
-# Session Handoff
-
-> Generated: 2025-07-15 | Branch: feature/order-validation | Author: @dev1
-
-## Completed
-- [x] Implemented CreateOrder with validation (see PR #142 for full diff)
-
-## Pending
-- [ ] **Needs review before merge**: CreateOrder validation rules
-  - Reviewer should check: max order amount ($50,000 cap), currency handling
-  - Open question: should we validate product existence at command level or handler level?
-    - Current choice: handler level (after DB lookup) — but this means invalid product IDs
-      return 500 instead of 400. Might want to reconsider.
-
-## Decisions Made
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Validation library | FluentValidation | Already used in Catalog module, consistent approach |
-| Error response format | ProblemDetails | RFC 7807, aligns with error-handling skill |
-| Validation timing | Before handler dispatch | Fail fast, don't waste DB roundtrips |
-```
-
 ## Anti-patterns
 
 ### Abrupt Endings

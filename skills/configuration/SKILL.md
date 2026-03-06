@@ -98,41 +98,6 @@ builder.Services.AddOptions<JwtOptions>()
     .ValidateOnStart();
 ```
 
-### Environment-Based Configuration
-
-```
-appsettings.json                    # Base configuration (defaults)
-appsettings.Development.json        # Development overrides
-appsettings.Staging.json            # Staging overrides
-appsettings.Production.json         # Production overrides (minimal — most from env vars)
-```
-
-```csharp
-// Environment is set via ASPNETCORE_ENVIRONMENT or DOTNET_ENVIRONMENT
-// .NET automatically loads the correct appsettings file
-var builder = WebApplication.CreateBuilder(args);
-// builder.Configuration already includes:
-// 1. appsettings.json
-// 2. appsettings.{Environment}.json
-// 3. Environment variables
-// 4. User secrets (Development only)
-// 5. Command-line args
-```
-
-### User Secrets (Development)
-
-```bash
-# Initialize user secrets for a project
-dotnet user-secrets init --project src/MyApp.Api
-
-# Set secrets
-dotnet user-secrets set "Jwt:Key" "my-super-secret-key-at-least-32-chars"
-dotnet user-secrets set "Database:ConnectionString" "Host=localhost;Database=myapp;..."
-
-# List secrets
-dotnet user-secrets list --project src/MyApp.Api
-```
-
 ### Azure Key Vault (Production)
 
 ```csharp

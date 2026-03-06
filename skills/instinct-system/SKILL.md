@@ -65,37 +65,15 @@ Store instincts in `.claude/instincts.md` with categories and structured metadat
 ## Code Style [0.7]
 - Use `sealed` on all handler classes | confidence: 0.8 | seen: 5 | last: 2025-07-15
 - Prefix private fields with underscore | confidence: 0.5 | seen: 2 | last: 2025-07-14
-- Use expression-bodied members for single-line methods | confidence: 0.3 | seen: 1 | last: 2025-07-15
 
 ## Architecture [0.6]
 - Feature folders use singular names (Order, not Orders) | confidence: 0.7 | seen: 4 | last: 2025-07-15
-- Each feature has exactly one file with endpoint + handler + validator | confidence: 0.5 | seen: 2 | last: 2025-07-14
 
 ## Naming [0.5]
 - Command classes end in Command, not Request | confidence: 0.5 | seen: 3 | last: 2025-07-15
-- Response records end in Response, not Dto | confidence: 0.3 | seen: 1 | last: 2025-07-14
-
-## Testing [0.4]
-- Integration tests inherit from ApiFixture | confidence: 0.5 | seen: 2 | last: 2025-07-15
-- Test method naming: Method_Scenario_Expected | confidence: 0.3 | seen: 1 | last: 2025-07-14
-
-## Data Access [0.5]
-- EF configurations are in a Persistence/Configurations folder | confidence: 0.7 | seen: 3 | last: 2025-07-15
-
-## API Design [0.4]
-- All endpoints return TypedResults | confidence: 0.5 | seen: 2 | last: 2025-07-14
-
-## Configuration [0.3]
-- Connection strings use the Options pattern, never raw IConfiguration | confidence: 0.3 | seen: 1 | last: 2025-07-15
-
-## Performance [0.3]
-- Hot-path queries use compiled queries | confidence: 0.3 | seen: 1 | last: 2025-07-14
-
-## Tooling [0.3]
-- CI runs dotnet format --verify-no-changes | confidence: 0.3 | seen: 1 | last: 2025-07-15
 ```
 
-The category header `[0.7]` shows the average confidence across instincts in that category.
+Category header `[0.7]` = average confidence. Use standard categories: Code Style, Architecture, Naming, Testing, Data Access, API Design, Configuration, Performance, Tooling. Each entry: `description | confidence: N | seen: N | last: date`.
 
 ### Confidence Adjustment Rules
 
@@ -193,26 +171,7 @@ PROMOTION STEPS:
 
 ### Export and Import Between Projects
 
-Share instincts between similar projects with confidence decay:
-
-```
-EXPORT RULES:
-- Only export instincts with confidence >= 0.7
-- Include the full metadata (confidence, seen count, last date)
-- Format as a portable .claude/instincts-export.md
-
-IMPORT RULES:
-- Apply 0.2 confidence decay on import
-- Your 0.9 becomes their 0.7 (strong but needs local confirmation)
-- Your 0.7 becomes their 0.5 (needs confirmation before following)
-- Never import at > 0.7 — every project must confirm locally
-- Mark imported instincts with source: "imported from [project]"
-
-EXAMPLE:
-  Export from ProjectA: "Use sealed on handlers | confidence: 0.9 | seen: 8"
-  Import to ProjectB:   "Use sealed on handlers | confidence: 0.7 | seen: 0 | source: ProjectA"
-  → ProjectB must confirm locally before this becomes a rule
-```
+Export instincts at 0.7+ to `.claude/instincts-export.md`. On import, apply 0.2 confidence decay (0.9 becomes 0.7, 0.7 becomes 0.5). Never import above 0.7 — every project must confirm locally. Mark imported instincts with `source: "imported from [project]"`.
 
 ### Session-Start Instinct Loading
 
@@ -225,22 +184,6 @@ SESSION START:
 3. Note instincts at 0.5-0.6 for mention-when-relevant
 4. Ignore instincts below 0.5 (they'll be confirmed or discarded organically)
 5. Check for stale instincts (no updates in 10+ sessions) — flag for review
-```
-
-### Instinct Categories
-
-Organize instincts by domain. Use these standard categories:
-
-```
-Code Style       — formatting, modifiers, syntax preferences
-Architecture     — project structure, layer boundaries, patterns
-Naming           — type names, method names, variable names, file names
-Testing          — test organization, assertion style, fixture patterns
-Data Access      — EF Core patterns, query style, migration conventions
-API Design       — endpoint structure, response format, versioning
-Configuration    — options pattern, secrets, environment handling
-Performance      — caching strategy, query optimization, async patterns
-Tooling          — CI/CD, linting, formatting, build configuration
 ```
 
 ## Anti-patterns

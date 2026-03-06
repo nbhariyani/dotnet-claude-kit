@@ -68,30 +68,16 @@ Structure memory by category with consistent rule formatting:
 
 ## Architecture
 - This project uses Vertical Slice Architecture — one file per feature operation
-- Shared kernel contains only contracts and cross-cutting concerns, never business logic
-
-## Naming
-- Suffix all async methods with `Async` — no exceptions
-- Use `I{Module}Module` for module registration interfaces
 
 ## Data Access
 - Always use HybridCache over IMemoryCache — stampede protection + L1/L2
 - Never use repository pattern over EF Core — use DbContext directly
 
-## API Design
-- All endpoints must return TypedResults, not Results — for OpenAPI metadata
-- Use MapGroup for route grouping — never register endpoints individually
-
 ## Testing
 - Integration tests use ApiFixture base class — never raw WebApplicationFactory
-- Use Testcontainers for database tests — never in-memory database
-
-## Configuration
-- Use Options pattern with validation — never read IConfiguration directly in services
-
-## Performance
-- Use compiled queries for any EF query called more than once per request
 ```
+
+Use categories: Code Style, Architecture, Naming, Data Access, API Design, Testing, Configuration, Performance. Each rule: one line, actionable, with rationale after the dash.
 
 ### Rule Generalization: Specific to Class
 
@@ -112,20 +98,6 @@ GENERALIZED RULE:
 injectable and testable. This applies to all production code."
 ```
 
-```
-SPECIFIC CORRECTION:
-"The OrderId should be a strongly-typed ID, not a raw Guid"
-
-GENERALIZATION STEPS:
-1. Is this specific to OrderId? → Partially — check if other IDs follow same pattern
-2. Is this a project convention? → Yes, all entity IDs use strongly-typed wrappers
-3. What's the broadest correct statement?
-
-GENERALIZED RULE:
-"All entity IDs use strongly-typed ID wrappers (e.g., OrderId, CustomerId),
-never raw Guid or int. Check existing entity IDs for the project's pattern."
-```
-
 ### Periodic Memory Audit
 
 Every 5-10 sessions (or when memory exceeds 50 rules), audit for quality:
@@ -141,15 +113,7 @@ AUDIT CHECKLIST:
 
 ### Session-Start Memory Review
 
-At the beginning of each session, load and scan memory:
-
-```
-SESSION START WORKFLOW:
-1. Read MEMORY.md (auto-loaded if in .claude/ directory)
-2. Scan for rules relevant to the current task
-3. Keep relevant rules in active context
-4. Apply rules proactively — don't wait to be reminded
-```
+At session start, read MEMORY.md and apply relevant rules proactively. Do not wait to be reminded of rules that were already captured.
 
 ## Anti-patterns
 

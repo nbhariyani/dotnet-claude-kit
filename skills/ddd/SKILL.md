@@ -127,20 +127,8 @@ public sealed record Money
     }
 }
 
-// Domain/Common/EmailAddress.cs
-public sealed record EmailAddress
-{
-    public string Value { get; }
-
-    public EmailAddress(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || !value.Contains('@'))
-            throw new DomainException("Invalid email address");
-        Value = value.Trim().ToLowerInvariant();
-    }
-
-    public override string ToString() => Value;
-}
+// Other value objects (EmailAddress, OrderNumber, etc.) follow the same pattern:
+// sealed record, constructor validation, no public setters
 ```
 
 ### Strongly-Typed IDs with EF Core Converters
@@ -247,6 +235,7 @@ For logic that does not belong to a single aggregate:
 
 ```csharp
 // Domain/Orders/Services/PricingService.cs
+// Coordinates logic across aggregates — takes domain interfaces, returns value objects
 public sealed class PricingService(IDiscountPolicy discountPolicy)
 {
     public Money CalculatePrice(ProductId productId, int quantity, Money unitPrice, CustomerId customerId)
@@ -255,12 +244,6 @@ public sealed class PricingService(IDiscountPolicy discountPolicy)
         var discount = discountPolicy.GetDiscount(customerId, productId, quantity);
         return new Money(subtotal.Amount * (1 - discount), subtotal.Currency);
     }
-}
-
-// Domain/Orders/Interfaces/IDiscountPolicy.cs
-public interface IDiscountPolicy
-{
-    decimal GetDiscount(CustomerId customerId, ProductId productId, int quantity);
 }
 ```
 

@@ -124,43 +124,6 @@ SUBAGENT: "Summarize what the Orders module does"
 → WHY: Haiku for a quick overview, Sonnet if the module is complex
 ```
 
-### Cost-Effective Task Routing
-
-Optimize for both quality and cost:
-
-```
-DAILY DEVELOPMENT WORKFLOW:
-Morning planning session       → Opus 4.6 (15 min, high-value decisions)
-Feature implementation         → Sonnet 4.6 (2-3 hours, bulk of the work)
-Code review before PR          → Opus 4.6 (15 min, catch subtle issues)
-Bug fixes from CI              → Sonnet 4.6 (clear errors, known patterns)
-End-of-day wrap-up             → Sonnet 4.6 (structured capture, no deep reasoning)
-
-COST DISTRIBUTION:
-~10% on Opus 4.6   → High-leverage decisions, architecture, reviews
-~80% on Sonnet 4.6 → Implementation, tests, routine tasks
-~10% on Haiku 4.5  → Subagent lookups, summaries, simple automation
-```
-
-### Large Codebase Strategy
-
-When working with solutions containing 50+ projects:
-
-```
-APPROACH:
-1. Use Sonnet 4.6 as the primary model for large context navigation
-2. Combine with context-discipline (MCP-first, lazy loading)
-3. Spawn Haiku subagents for cross-project searches
-4. Bring in Opus only for cross-module architectural decisions
-
-EXAMPLE:
-Task: "Refactor error handling across all 12 modules"
-1. Opus 4.6: Design the error handling strategy (Result pattern, ProblemDetails mapping)
-2. Haiku 4.5 subagents (x4): Find current error handling in each module group
-3. Sonnet 4.6: Apply the pattern to each module (3-4 parallel worktrees)
-4. Opus 4.6: Final review of consistency across modules
-```
-
 ## Anti-patterns
 
 ### Using Opus for Simple Tasks
@@ -188,22 +151,6 @@ about team size, domain complexity, and long-term maintenance.
 Opus weighs team size, domain complexity, current codebase patterns,
 and long-term implications. The architecture decision is worth the
 extra reasoning power.
-```
-
-### Loading Everything Because the Window Is Large
-
-```
-// BAD — Sonnet has a large context, let's use it
-"Load all 34 skills, read every .cs file in the solution,
- dump the entire docker-compose.yml and all migration files."
-*Context is large but not infinite. Noise degrades quality.*
-
-// GOOD — large window + discipline
-Use the large context for genuine working memory:
-- Keep the plan, relevant code, and conversation in context
-- Use MCP tools for navigation (see context-discipline skill)
-- Load skills on demand, not all at once
-*Quality comes from focus, not from loading more*
 ```
 
 ### Same Model for All Subagents

@@ -93,16 +93,8 @@ options.WithOAuth2Authentication(oauth =>
 ### Available Themes
 
 ```csharp
-options.WithTheme(ScalarTheme.Default);     // Default theme
-options.WithTheme(ScalarTheme.Moon);        // Dark
-options.WithTheme(ScalarTheme.Purple);      // Purple accent
-options.WithTheme(ScalarTheme.BluePlanet);  // Blue accent
-options.WithTheme(ScalarTheme.Saturn);      // Saturn-inspired
-options.WithTheme(ScalarTheme.Mars);        // Mars-inspired
-options.WithTheme(ScalarTheme.DeepSpace);   // Deep space dark
-options.WithTheme(ScalarTheme.Kepler);      // Kepler-inspired
-options.WithTheme(ScalarTheme.Solarized);   // Solarized
-options.WithTheme(ScalarTheme.Laserwave);   // Retro
+// ScalarTheme options: Default, Moon, Purple, BluePlanet, Saturn, Mars, DeepSpace, Kepler, Solarized, Laserwave
+options.WithTheme(ScalarTheme.Mars);
 ```
 
 ### Multiple API Documents

@@ -129,50 +129,27 @@ jobs:
 
 ### Azure DevOps — Build + Test
 
+Same restore → build → format → test flow as GitHub Actions. Key differences:
+
 ```yaml
 # azure-pipelines.yml
 trigger:
   branches:
-    include:
-      - main
+    include: [main]
   paths:
-    exclude:
-      - '*.md'
-      - docs/
+    exclude: ['*.md', docs/]
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: 'ubuntu-latest'          # vs runs-on: ubuntu-latest
 
 variables:
   dotnetVersion: '10.0.x'
-  buildConfiguration: 'Release'
 
-stages:
-  - stage: Build
-    jobs:
-      - job: BuildAndTest
-        steps:
-          - task: UseDotNet@2
-            inputs:
-              version: $(dotnetVersion)
-
-          - script: dotnet restore
-            displayName: Restore
-
-          - script: dotnet build --no-restore -c $(buildConfiguration)
-            displayName: Build
-
-          - script: dotnet format --verify-no-changes --no-restore
-            displayName: Format check
-
-          - script: dotnet test --no-build -c $(buildConfiguration) --logger trx
-            displayName: Test
-
-          - task: PublishTestResults@2
-            condition: always()
-            inputs:
-              testResultsFormat: VSTest
-              testResultsFiles: '**/*.trx'
+# Key task differences from GitHub Actions:
+#   Setup .NET:  task: UseDotNet@2  (inputs: version: $(dotnetVersion))
+#   Test results: task: PublishTestResults@2  (testResultsFormat: VSTest)
+#   Steps use `script:` + `displayName:` instead of `- name:` + `run:`
+#   Services (e.g., Postgres) require a separate Docker task or pipeline service connection
 ```
 
 ### NuGet Package Publishing

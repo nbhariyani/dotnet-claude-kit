@@ -55,7 +55,8 @@ builder.Build().Run();
 ### Service Defaults
 
 ```csharp
-// ServiceDefaults/Extensions.cs
+// ServiceDefaults/Extensions.cs — Standard Aspire service defaults
+// Configures OpenTelemetry (metrics + tracing), health checks, service discovery, and resilience
 public static class Extensions
 {
     public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
@@ -73,50 +74,9 @@ public static class Extensions
         return builder;
     }
 
-    public static IHostApplicationBuilder ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
-    {
-        builder.Logging.AddOpenTelemetry(logging =>
-        {
-            logging.IncludeFormattedMessage = true;
-            logging.IncludeScopes = true;
-        });
-
-        builder.Services.AddOpenTelemetry()
-            .WithMetrics(metrics =>
-            {
-                metrics
-                    .AddAspNetCoreInstrumentation()
-                    .AddHttpClientInstrumentation()
-                    .AddRuntimeInstrumentation();
-            })
-            .WithTracing(tracing =>
-            {
-                tracing
-                    .AddAspNetCoreInstrumentation()
-                    .AddHttpClientInstrumentation()
-                    .AddEntityFrameworkCoreInstrumentation();
-            });
-
-        builder.AddOpenTelemetryExporters();
-        return builder;
-    }
-
-    public static IHostApplicationBuilder AddDefaultHealthChecks(this IHostApplicationBuilder builder)
-    {
-        builder.Services.AddHealthChecks()
-            .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
-        return builder;
-    }
-
-    private static IHostApplicationBuilder AddOpenTelemetryExporters(this IHostApplicationBuilder builder)
-    {
-        var useOtlp = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
-        if (useOtlp)
-        {
-            builder.Services.AddOpenTelemetry().UseOtlpExporter();
-        }
-        return builder;
-    }
+    // ConfigureOpenTelemetry: adds logging, metrics (ASP.NET, HttpClient, Runtime),
+    //   tracing (ASP.NET, HttpClient, EF Core), and OTLP exporter if configured
+    // AddDefaultHealthChecks: adds a "self" liveness check tagged ["live"]
 }
 ```
 

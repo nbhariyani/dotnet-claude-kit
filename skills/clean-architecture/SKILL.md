@@ -222,33 +222,51 @@ public class Order : Entity
 }
 ```
 
-### Thin Endpoint Wiring
+### Thin Endpoint Wiring (IEndpointGroup Auto-Discovery)
+
+Every endpoint group implements `IEndpointGroup` and is auto-discovered via `app.MapEndpoints()`. Program.cs never changes when adding new endpoints. See the **minimal-api** skill for the full `IEndpointGroup` interface and `EndpointExtensions` setup.
 
 ```csharp
 // Api/Endpoints/OrderEndpoints.cs
-public static class OrderEndpoints
+public sealed class OrderEndpoints : IEndpointGroup
 {
-    public static RouteGroupBuilder MapOrders(this IEndpointRouteBuilder app)
+    public void Map(IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/orders").WithTags("Orders");
 
-        group.MapPost("/", async (CreateOrderCommand command, ISender sender, CancellationToken ct) =>
-        {
-            var result = await sender.Send(command, ct);
-            return result.IsSuccess
-                ? TypedResults.Created($"/api/orders/{result.Value}", result.Value)
-                : result.ToProblemDetails();
-        });
+        group.MapPost("/", CreateOrder)
+            .WithName("CreateOrder");
 
-        group.MapGet("/{id:guid}", async (Guid id, ISender sender, CancellationToken ct) =>
-        {
-            var result = await sender.Send(new GetOrderQuery(id), ct);
-            return result.IsSuccess
-                ? TypedResults.Ok(result.Value)
-                : TypedResults.NotFound();
-        });
+        group.MapGet("/{id:guid}", GetOrder)
+            .WithName("GetOrder");
 
-        return group;
+        group.MapGet("/", ListOrders)
+            .WithName("ListOrders");
+    }
+
+    private static async Task<IResult> CreateOrder(
+        CreateOrderCommand command, ISender sender, CancellationToken ct)
+    {
+        var result = await sender.Send(command, ct);
+        return result.IsSuccess
+            ? TypedResults.Created($"/api/orders/{result.Value}", result.Value)
+            : result.ToProblemDetails();
+    }
+
+    private static async Task<IResult> GetOrder(
+        Guid id, ISender sender, CancellationToken ct)
+    {
+        var result = await sender.Send(new GetOrderQuery(id), ct);
+        return result.IsSuccess
+            ? TypedResults.Ok(result.Value)
+            : TypedResults.NotFound();
+    }
+
+    private static async Task<IResult> ListOrders(
+        [AsParameters] ListOrdersQuery query, ISender sender, CancellationToken ct)
+    {
+        var result = await sender.Send(query, ct);
+        return TypedResults.Ok(result);
     }
 }
 ```

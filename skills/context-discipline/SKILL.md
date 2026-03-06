@@ -88,37 +88,16 @@ SUBAGENT APPROACH (efficient):
 - Main context stays clean
 ```
 
-### Context Budget Planning Template
+### Context Budget Planning
 
-Before a complex task, plan your token budget:
+Before a complex task, estimate token spend per phase:
 
 ```
-TASK: Implement new feature in Orders module
-ESTIMATED BUDGET: 200k tokens total
-
-PHASE 1 — UNDERSTAND (budget: 5k tokens)
-├── MCP: get_project_graph              → ~100 tokens
-├── MCP: find_symbol "Order"            → ~50 tokens
-├── MCP: get_public_api "OrderService"  → ~120 tokens
-├── Subagent: explore Orders module     → ~500 tokens (summary)
-└── Reserve                             → ~4230 tokens
-
-PHASE 2 — PLAN (budget: 2k tokens)
-├── Discussion with user                → ~1500 tokens
-└── Plan documentation                  → ~500 tokens
-
-PHASE 3 — IMPLEMENT (budget: 15k tokens)
-├── Read files to modify (3 files)      → ~3000 tokens
-├── Write new code                      → ~5000 tokens
-├── Iteration on feedback               → ~7000 tokens
-
-PHASE 4 — VERIFY (budget: 3k tokens)
-├── Build output                        → ~500 tokens
-├── Test output                         → ~1500 tokens
-├── Diagnostics                         → ~500 tokens
-└── Format check                        → ~500 tokens
-
-REMAINING for conversation: ~175k tokens — comfortable
+UNDERSTAND (~5k): MCP queries (~300) + subagent exploration (~500) + reserve
+PLAN (~2k):       Discussion + plan documentation
+IMPLEMENT (~15k): Read files to modify (~3k) + write code (~5k) + iteration (~7k)
+VERIFY (~3k):     Build + test + diagnostics + format check
+REMAINING: ~175k for conversation — comfortable
 ```
 
 ### File Reading Prioritization
@@ -145,43 +124,21 @@ NEVER READ:
 - Package/config files unless specifically needed
 ```
 
-### Context Pruning Triggers
-
-Recognize when your context is getting heavy and take action:
+### Context Pruning & Large Codebase Strategy
 
 ```
-WARNING SIGNS:
-- You've read more than 10 files in one session
-- The conversation has gone past 50 exchanges
-- You're starting to forget earlier details
-- Tool outputs are being truncated
-- You catch yourself re-reading a file you already read
+WARNING SIGNS (take action if any apply):
+- Read 10+ files, 50+ exchanges, forgetting earlier details, re-reading files
 
-RECOVERY ACTIONS:
-1. Summarize what you know so far in 5-10 lines
-2. Switch to subagents for remaining exploration
-3. Use MCP tools exclusively for new lookups
-4. Avoid re-reading files — reference line numbers from earlier reads
-5. For large remaining work, suggest a new session with a handoff note
-```
+RECOVERY: Summarize in 5-10 lines → subagents for remaining exploration →
+MCP-only for new lookups → reference prior line numbers → suggest new session if needed
 
-### Large Codebase Strategy
+LARGE CODEBASES (50+ projects):
+get_project_graph → identify 2-3 relevant projects → find_symbol for key types →
+get_public_api for interfaces → read ONLY files you'll modify → subagents for cross-cutting
 
-For solutions with 50+ projects or 500+ files:
-
-```
-APPROACH:
-1. Start with get_project_graph — understand the solution shape (~100 tokens)
-2. Identify the 2-3 projects relevant to the task
-3. Use find_symbol to locate key types within those projects
-4. Use get_public_api to understand interfaces without reading files
-5. Only read the specific files you need to modify
-6. Use subagents for cross-cutting analysis
-
-NEVER:
-- Read every file in a project to "understand it"
-- Load all skills at once — load them as topics come up
-- Open a file to find one function — use find_symbol instead
+NEVER: Read every file to "understand" a project, load all skills upfront,
+open a file to find one function (use find_symbol)
 ```
 
 ## Anti-patterns

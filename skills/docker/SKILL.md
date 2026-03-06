@@ -63,20 +63,17 @@ ENTRYPOINT ["dotnet", "MyApp.Api.dll"]
 ```
 **/.git
 **/.vs
-**/.vscode
 **/bin
 **/obj
 **/node_modules
-**/.idea
 **/Dockerfile*
-**/.dockerignore
 **/docker-compose*
-**/*.md
 **/tests
-**/.editorconfig
 ```
 
 ### Docker Compose for Local Development
+
+Key .NET-specific concerns — pass connection strings via environment, use `depends_on` with health checks:
 
 ```yaml
 services:
@@ -93,32 +90,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
-
-  postgres:
-    image: postgres:17
-    environment:
-      POSTGRES_DB: myapp
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
-volumes:
-  postgres-data:
+  # Add postgres/redis services with healthcheck — standard boilerplate
 ```
 
 ### Optimized Build with .slnx
@@ -193,16 +165,6 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 USER app
 COPY --from=build /app .
 ENTRYPOINT ["dotnet", "MyApp.Api.dll"]
-```
-
-### Don't Hardcode Connection Strings
-
-```dockerfile
-# BAD — secrets in Dockerfile
-ENV ConnectionStrings__Default="Host=prod-server;Password=secret"
-
-# GOOD — pass at runtime
-# docker run -e ConnectionStrings__Default="..." myapp
 ```
 
 ## Decision Guide

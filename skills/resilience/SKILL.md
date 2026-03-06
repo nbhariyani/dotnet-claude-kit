@@ -193,71 +193,33 @@ builder.Services.AddOpenTelemetry()
 
 ### Rate Limiting (.NET Built-in)
 
-.NET provides built-in rate limiting middleware — no external packages needed.
+.NET provides built-in rate limiting middleware via `AddRateLimiter()` — no external packages needed. Algorithms: `AddFixedWindowLimiter`, `AddSlidingWindowLimiter`, `AddTokenBucketLimiter`, `AddConcurrencyLimiter`.
 
 ```csharp
-// Program.cs — configure rate limiting policies
 builder.Services.AddRateLimiter(options =>
 {
-    // Fixed window: 100 requests per 60 seconds
     options.AddFixedWindowLimiter("fixed", opt =>
     {
         opt.PermitLimit = 100;
         opt.Window = TimeSpan.FromSeconds(60);
-        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        opt.QueueLimit = 0; // Reject immediately when limit is hit
+        opt.QueueLimit = 0;
     });
 
-    // Sliding window: smoother distribution across time segments
-    options.AddSlidingWindowLimiter("sliding", opt =>
-    {
-        opt.PermitLimit = 100;
-        opt.Window = TimeSpan.FromSeconds(60);
-        opt.SegmentsPerWindow = 6; // 10-second segments
-    });
-
-    // Token bucket: burst-friendly with steady refill
-    options.AddTokenBucketLimiter("token-bucket", opt =>
-    {
-        opt.TokenLimit = 50;
-        opt.ReplenishmentPeriod = TimeSpan.FromSeconds(10);
-        opt.TokensPerPeriod = 10;
-    });
-
-    // Custom 429 response with ProblemDetails
+    // Always return ProblemDetails with Retry-After on 429
     options.OnRejected = async (context, ct) =>
     {
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-        var problem = new ProblemDetails
-        {
-            Title = "Too many requests",
-            Status = StatusCodes.Status429TooManyRequests,
-            Type = "https://tools.ietf.org/html/rfc6585#section-4"
-        };
-
         if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
-        {
             context.HttpContext.Response.Headers.RetryAfter =
                 ((int)retryAfter.TotalSeconds).ToString();
-            problem.Extensions["retryAfter"] = (int)retryAfter.TotalSeconds;
-        }
-
-        await context.HttpContext.Response.WriteAsJsonAsync(problem, ct);
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new ProblemDetails { Title = "Too many requests", Status = 429 }, ct);
     };
 });
 
-// Middleware
 app.UseRateLimiter();
-
-// Per-endpoint usage
 app.MapGet("/api/orders", ListOrders).RequireRateLimiting("fixed");
-app.MapPost("/api/orders", CreateOrder).RequireRateLimiting("token-bucket");
-
-// Or apply to a group
-var group = app.MapGroup("/api/products").RequireRateLimiting("sliding");
 ```
-
-**Why**: Built-in rate limiting is middleware-native, supports multiple algorithms, and returns proper `429` responses with `Retry-After` headers. No need for third-party packages.
 
 ## Anti-patterns
 
@@ -380,10 +342,3 @@ builder.Services.AddOpenTelemetry()
 | Read-heavy microservice | Standard handler + hedging | Low latency with redundancy |
 | API rate limiting | `AddRateLimiter()` + `RequireRateLimiting()` | Fixed, sliding, or token bucket per endpoint |
 
-## NuGet Packages
-
-| Package | Purpose |
-|---------|---------|
-| `Microsoft.Extensions.Http.Resilience` | HTTP resilience handlers (`AddStandardResilienceHandler`, `AddResilienceHandler`) |
-| `Microsoft.Extensions.Resilience` | Non-HTTP resilience pipelines (`AddResiliencePipeline`) |
-| `Polly.Core` | Core library (pulled transitively, rarely referenced directly) |

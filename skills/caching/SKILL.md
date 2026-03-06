@@ -126,38 +126,11 @@ group.MapPut("/{id:guid}", async (Guid id, UpdateProductRequest request,
 });
 ```
 
-### Cache-Aside Pattern (Manual)
+### Cache-Aside Pattern (Legacy)
 
-When you need more control than HybridCache provides.
-
-```csharp
-public class ProductCache(IDistributedCache cache, AppDbContext db)
-{
-    private static readonly DistributedCacheEntryOptions CacheOptions = new()
-    {
-        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10),
-        SlidingExpiration = TimeSpan.FromMinutes(2)
-    };
-
-    public async Task<Product?> GetByIdAsync(Guid id, CancellationToken ct)
-    {
-        var key = $"products:{id}";
-        var cached = await cache.GetStringAsync(key, ct);
-
-        if (cached is not null)
-            return JsonSerializer.Deserialize<Product>(cached);
-
-        var product = await db.Products.FindAsync([id], ct);
-        if (product is not null)
-        {
-            await cache.SetStringAsync(key,
-                JsonSerializer.Serialize(product), CacheOptions, ct);
-        }
-
-        return product;
-    }
-}
-```
+> **Prefer HybridCache** for all new code. Manual `IDistributedCache` cache-aside lacks stampede
+> protection, requires manual serialization, and has no L1/L2 layering. Use only when
+> integrating with existing code that already uses `IDistributedCache` directly.
 
 ## Anti-patterns
 

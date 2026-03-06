@@ -35,34 +35,15 @@ Each entry follows a consistent structure in `.claude/learning-log.md`:
 # Learning Log
 
 ## 2025-07-15 | Bug Root Cause | EF Core SaveChanges Silently Succeeds on Duplicate Keys
-When inserting an entity with a duplicate primary key, `SaveChangesAsync` doesn't throw
-immediately — it throws on the next `SaveChangesAsync` call in the same context. This
-caused a misleading error in the OrderCreation flow where the exception appeared in
-the notification step, not the order insert step.
-**Files:** `src/Orders/Features/CreateOrder.cs:42`, `src/Orders/Persistence/OrdersDbContext.cs`
+`SaveChangesAsync` with a duplicate PK throws on the *next* `SaveChangesAsync` call, not the insert.
+**Files:** `src/Orders/Features/CreateOrder.cs:42`
 **Resolution:** Call `SaveChangesAsync` immediately after `Add()`, before any other operations.
 
-## 2025-07-14 | Performance Discovery | Compiled Queries Don't Support Include()
-EF Core compiled queries (`EF.CompileAsyncQuery`) cannot use `.Include()` for eager
-loading. Attempting it compiles but produces incorrect SQL that silently returns null
-navigation properties. Discovered when order items were missing in the API response.
-**Files:** `src/Orders/Features/GetOrderDetails.cs:28`
-**Resolution:** Use regular queries with `AsSplitQuery()` for complex includes.
-
 ## 2025-07-12 | Gotcha | MassTransit Consumer Registration Order Matters
-When registering multiple consumers for the same message type, MassTransit processes
-them in registration order. If the first consumer throws, subsequent consumers are
-skipped (default behavior). This caused the audit consumer to miss events when the
-notification consumer failed.
+Multiple consumers for the same message type run in registration order. If the first throws,
+subsequent consumers are skipped. Caused missed audit events.
 **Files:** `src/Shared/Extensions/MassTransitConfig.cs:15-30`
 **Resolution:** Configure independent consumer endpoints or use the retry filter.
-
-## 2025-07-10 | Architecture Decision | Why Orders Uses VSA While Identity Uses CA
-The Orders module was initially Clean Architecture but was refactored to VSA because:
-90% of operations are simple CRUD with validation. CA added 4 files per feature
-(entity, interface, implementation, DTO) for operations that fit in 1 file. Identity
-kept CA because auth flows genuinely need the abstraction layers.
-**Files:** `src/Modules/Orders/`, `src/Modules/Identity/`
 ```
 
 ### Auto-Logging Triggers
@@ -124,29 +105,6 @@ Quick (during work):  Date | Category | Title + 1-line description + files
 Full (if time allows): Date | Category | Title + full description + resolution + files
 
 A quick entry is infinitely better than no entry.
-```
-
-### Monthly Review and Promotion
-
-Every month (or every 20 entries), review the log:
-
-```
-REVIEW CHECKLIST:
-1. SCAN for patterns — 3+ entries about the same subsystem = systemic issue
-2. PROMOTE recurring gotchas to MEMORY.md as preventive rules
-3. ARCHIVE entries older than 3 months that are no longer relevant
-4. FLAG entries that should become documentation (README, ADR, or CLAUDE.md)
-5. COUNT entries by category — what kind of discoveries dominate?
-
-PROMOTION EXAMPLES:
-Learning log entry: "EF Core compiled queries don't support Include()"
-→ Promotes to MEMORY.md rule: "Never use compiled queries with Include() —
-   use regular queries with AsSplitQuery() for eager loading"
-
-Learning log entry (3x): "MassTransit consumer ordering caused issues"
-→ Promotes to MEMORY.md rule: "Always configure independent consumer
-   endpoints for MassTransit — don't rely on registration order"
-→ Also warrants an ADR documenting the messaging architecture decision
 ```
 
 ### Log vs. Memory vs. Handoff
@@ -223,18 +181,13 @@ The log stays lean and the rules get stronger
 ### Duplicating MEMORY.md Content
 
 ```
-// BAD — same information in both places
+// BAD — restating a MEMORY.md rule as a log entry
 MEMORY.md: "Always use TimeProvider instead of DateTime.Now"
-learning-log.md: "## 2025-07-15 | Gotcha | DateTime.Now Is Not Testable"
-*The rule and the insight say the same thing — redundant*
+learning-log.md: "## Gotcha | DateTime.Now Is Not Testable" ← redundant
 
-// GOOD — complementary, not duplicative
-MEMORY.md: "Always use TimeProvider instead of DateTime.Now"
-learning-log.md: "## 2025-07-15 | Bug Root Cause | Flaky Test Due to DateTime.Now
-  OrderExpiry test failed intermittently because DateTime.Now crossed midnight
-  during the test run. Switching to TimeProvider with a fixed FakeTimeProvider
-  in the fixture eliminated the flakiness."
-*The rule says WHAT to do. The log says WHY it matters with a real example.*
+// GOOD — log adds a concrete incident the rule doesn't capture
+learning-log.md: "## Bug Root Cause | Flaky Test Due to DateTime.Now
+  OrderExpiry test failed intermittently — DateTime.Now crossed midnight during run."
 ```
 
 ## Decision Guide

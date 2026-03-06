@@ -79,34 +79,20 @@ Compile findings into a structured summary:
 
 ### Naming
 - Classes: `internal sealed class` (95% of handlers/services)
-- Interfaces: `I` prefix (100% consistent)
 - Suffixes: Handlers end in `Handler`, validators in `Validator`
 - Records: Used for DTOs and commands/queries
-- Private fields: `_camelCase` with underscore prefix
 
 ### Structure
 - Architecture: Vertical Slice Architecture
 - Features: `Features/{Name}/` with command, handler, validator, endpoint in one file
-- Tests: `Tests/Features/{Name}/` mirroring source structure
-- Shared: `Common/` for cross-cutting, `Extensions/` for extension methods
 
 ### Code Style
 - Primary constructors: Used consistently for DI injection
-- Collection expressions: Used for empty collections `[]`
 - Nullable: Enabled globally, no suppressions (`!`) used
 - File-scoped namespaces: 100% consistent
-
-### EF Core
-- Configurations: Separate `IEntityTypeConfiguration<T>` files in `Persistence/Configurations/`
-- Naming: Table names PascalCase, column names PascalCase
-- Migrations: Descriptive names (`AddOrderShippingAddress`, not `Update1`)
-
-### Testing
-- Framework: xUnit v3
-- Pattern: One test class per feature
-- Naming: `{MethodName}_{Scenario}_{ExpectedResult}`
-- Fixtures: `TestWebAppFactory` shared via `IClassFixture`
 ```
+
+Add categories as needed: EF Core (configurations, naming, migrations), Testing (framework, naming, fixtures), etc.
 
 ### Convention Enforcement
 
@@ -145,27 +131,11 @@ Flag deviations from detected conventions:
 After detecting conventions, suggest `.editorconfig` rules to enforce them automatically:
 
 ```ini
-# .editorconfig additions based on detected conventions
-
-# Enforce internal sealed on handlers
-dotnet_diagnostic.CA1852.severity = warning  # Seal internal types
-
-# Enforce file-scoped namespaces
+# Key .editorconfig rules to suggest based on detected conventions
+dotnet_diagnostic.CA1852.severity = warning           # Seal internal types
 csharp_style_namespace_declarations = file_scoped:warning
-
-# Enforce primary constructors
 csharp_style_prefer_primary_constructors = true:suggestion
-
-# Naming: _camelCase for private fields
-dotnet_naming_rule.private_fields_should_be_camel_case.severity = warning
-dotnet_naming_rule.private_fields_should_be_camel_case.symbols = private_fields
-dotnet_naming_rule.private_fields_should_be_camel_case.style = camel_case_underscore
-
-dotnet_naming_symbols.private_fields.applicable_kinds = field
-dotnet_naming_symbols.private_fields.applicable_accessibilities = private
-
-dotnet_naming_style.camel_case_underscore.required_prefix = _
-dotnet_naming_style.camel_case_underscore.capitalization = camel_case
+# Add dotnet_naming_rule entries for private field prefix (_camelCase) if detected
 ```
 
 ### Anti-pattern Tracking

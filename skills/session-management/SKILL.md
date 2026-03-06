@@ -80,25 +80,7 @@ STEP 2: Check for Uncommitted Changes
   → If clean: note "All changes committed"
 
 STEP 3: Write Handoff
-  → Write .claude/handoff.md with the standard template:
-
-  # Session Handoff
-  > Generated: [date] | Branch: [current branch]
-
-  ## Completed
-  - [x] [task with file paths and line numbers]
-
-  ## Pending
-  - [ ] [next task with specific starting point]
-
-  ## Learned
-  - [discovery or correction worth preserving]
-
-  ## Context
-  - Branch: [name]
-  - Last commit: [message]
-  - Uncommitted changes: [yes/no]
-  - Solution: [path]
+  → Write .claude/handoff.md using the Handoff File Template (see below)
 
 STEP 4: Extract Learnings
   → Review session for corrections from the user

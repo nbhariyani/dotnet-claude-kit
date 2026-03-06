@@ -128,38 +128,11 @@ This module uses Vertical Slice Architecture. Each feature is one file under Fea
 
 ### Pattern 4: Split by Team
 
-When different teams own different parts of the system:
-
-```
-project-root/
-├── CLAUDE.md                          # Shared standards (all teams)
-├── .claude/
-│   └── teams/
-│       ├── backend.md                 # Backend team conventions
-│       ├── frontend.md                # Frontend/Blazor team conventions
-│       └── platform.md               # Platform/DevOps team conventions
-```
+Place team-specific files in `.claude/teams/` (e.g., `backend.md`, `frontend.md`, `platform.md`). Root CLAUDE.md holds shared standards. Each team file covers only that team's conventions.
 
 ### Pattern 5: Conditional Loading
 
-For complex projects, indicate when certain instructions apply:
-
-```markdown
-# Root CLAUDE.md
-
-## Always Loaded
-- Modern C# 14 conventions
-- TimeProvider over DateTime.Now
-- No repository pattern over EF Core
-
-## Load When Working On...
-- **API endpoints** → See `.claude/instructions/api-design.md`
-- **Database/EF Core** → See `.claude/instructions/data-access.md`
-- **Tests** → See `.claude/instructions/testing.md`
-- **Docker/CI** → See `.claude/instructions/deployment.md`
-- **Orders module** → See `src/Modules/Orders/CLAUDE.md`
-- **Catalog module** → See `src/Modules/Catalog/CLAUDE.md`
-```
+In root CLAUDE.md, add a "Load When Working On..." section that maps task domains to instruction files (e.g., "**API endpoints** → See `.claude/instructions/api-design.md`"). Universal rules stay in an "Always Loaded" section.
 
 ### Precedence Rules
 
@@ -186,23 +159,7 @@ CONFLICT RESOLUTION:
 
 ### Premature Splitting
 
-```
-// BAD — split a 100-line CLAUDE.md into 6 files
-project/
-├── CLAUDE.md (20 lines — just an index)
-├── .claude/instructions/
-│   ├── architecture.md (15 lines)
-│   ├── coding-standards.md (20 lines)
-│   ├── testing.md (15 lines)
-│   ├── api-design.md (15 lines)
-│   └── data-access.md (15 lines)
-*Six files to maintain for 100 lines of content. Overhead exceeds benefit.*
-
-// GOOD — keep it monolithic until it hurts
-project/
-├── CLAUDE.md (100 lines — everything in one place)
-*Easy to find, easy to maintain, no conflict risk*
-```
+Do not split a sub-300-line CLAUDE.md into multiple files. The maintenance overhead of 6 tiny files exceeds the benefit. Keep it monolithic until finding rules becomes painful.
 
 ### Conflicting Cross-File Instructions
 

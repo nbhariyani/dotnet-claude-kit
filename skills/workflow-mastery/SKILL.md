@@ -125,29 +125,9 @@ What could go wrong? What's missing? What would you do differently?"
 
 ### Verification Loop for .NET
 
-Boris's #1 tip: "Give Claude a way to verify its work."
+> For the full 7-phase verification pipeline (build, diagnostics, anti-patterns, tests, security, format, diff review) with structured PASS/FAIL reporting, see the **verification-loop** skill.
 
-For .NET, the verification chain is:
-
-```
-1. dotnet build          → Does it compile?
-2. dotnet test           → Do existing tests pass?
-3. get_diagnostics (MCP) → Any new warnings?
-4. dotnet format --verify-no-changes → Is it formatted?
-```
-
-**Tell Claude explicitly:**
-
-```
-"After making changes:
-1. Run dotnet build and fix any errors
-2. Run dotnet test and ensure all tests pass
-3. Use get_diagnostics to check for new warnings
-4. Run dotnet format --verify-no-changes
-Do not tell me you're done until all 4 pass."
-```
-
-This turns Claude from "write code and hope" into "write code, verify, iterate until green."
+Boris's #1 tip: "Give Claude a way to verify its work." The short version: always tell Claude to run `dotnet build`, `dotnet test`, `get_diagnostics`, and `dotnet format --verify-no-changes` before declaring done. The verification-loop skill has the complete pipeline with short-circuit rules and report templates.
 
 ### Compounding Knowledge via Corrections
 

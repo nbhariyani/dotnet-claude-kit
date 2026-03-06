@@ -20,22 +20,6 @@ description: >
 
 ## Patterns
 
-### Service Lifetimes
-
-```csharp
-// Singleton — one instance for the entire application lifetime
-// Use for: stateless services, configuration, caches
-builder.Services.AddSingleton<IClock, SystemClock>();
-
-// Scoped — one instance per HTTP request (or per scope)
-// Use for: DbContext, services that hold request-specific state
-builder.Services.AddScoped<IOrderService, OrderService>();
-
-// Transient — new instance every time it's requested
-// Use for: lightweight, stateless services with no shared state
-builder.Services.AddTransient<IEmailBuilder, EmailBuilder>();
-```
-
 ### Keyed Services (.NET 8+)
 
 Use keyed services to register and resolve multiple implementations of the same interface.
@@ -169,22 +153,6 @@ public class OrderCache(IServiceScopeFactory scopeFactory)
         return await db.Orders.FindAsync(id);
     }
 }
-```
-
-### Don't Use Service Locator
-
-```csharp
-// BAD — resolving from IServiceProvider hides dependencies
-public class OrderService(IServiceProvider sp)
-{
-    public async Task Process()
-    {
-        var db = sp.GetRequiredService<AppDbContext>();
-    }
-}
-
-// GOOD — explicit constructor injection
-public class OrderService(AppDbContext db) { }
 ```
 
 ### Don't Register Everything as Singleton

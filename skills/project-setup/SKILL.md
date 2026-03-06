@@ -145,62 +145,7 @@ Grading scale:
 
 ### Migration Workflow
 
-Guided .NET version upgrade from older versions to .NET 10.
-
-**Step 1: Current State Assessment**
-```
-→ get_project_graph
-  Identify all target frameworks across the solution.
-```
-
-List all projects with their current target framework and flag inconsistencies.
-
-**Step 2: Breaking Changes Analysis**
-Reference `knowledge/breaking-changes.md` for the specific version transition:
-- .NET 8 → 10: Check for removed APIs, behavior changes
-- .NET 9 → 10: Check for C# 14 opportunities
-
-**Step 3: New Features to Adopt**
-Reference `knowledge/dotnet-whats-new.md`:
-- HybridCache (if not already using)
-- `field` keyword in properties
-- Primary constructors for remaining classes
-- Collection expressions where arrays/lists are initialized
-
-**Step 4: Generate Migration Plan**
-Produce a step-by-step plan:
-
-```
-## Migration Plan: .NET 8 → .NET 10
-
-### Phase 1: Framework Update
-1. Update `global.json` to SDK 10.0.100
-2. Update all `<TargetFramework>` to `net10.0`
-3. Run `dotnet restore`
-4. Run `dotnet build` — fix compilation errors
-
-### Phase 2: Package Updates
-1. Update Microsoft.* packages to 10.0.x
-2. Update third-party packages (check compatibility)
-3. Run `dotnet build` — fix any new issues
-
-### Phase 3: Adopt New Features
-1. Replace DateTime.Now → TimeProvider
-2. Add HybridCache where IDistributedCache is used
-3. Convert eligible classes to primary constructors
-4. Use collection expressions for array/list initialization
-
-### Phase 4: Verification
-1. Run full test suite
-2. Run health check workflow
-3. Review breaking-changes.md for behavioral changes
-```
-
-**Step 5: Post-Migration Verification**
-After migration is complete:
-- Run `dotnet build` — must be clean
-- Run `dotnet test` — all must pass
-- Run health check workflow to establish new baseline
+> For complete migration workflows (EF Core, NuGet, .NET version upgrades), see the **migration-workflow** skill.
 
 ## Anti-patterns
 

@@ -21,42 +21,20 @@ description: >
 
 ## Patterns
 
-### Primary Constructors (Classes and Structs)
+### Well-Known Features Quick Reference
 
-Use primary constructors to eliminate boilerplate field assignments. The parameters are available throughout the class body.
-
-```csharp
-// GOOD — primary constructor with DI
-public class OrderService(IOrderRepository repository, TimeProvider clock)
-{
-    public async Task<Result<Order>> CreateAsync(CreateOrderRequest request)
-    {
-        var order = Order.Create(request, clock.GetUtcNow());
-        await repository.AddAsync(order);
-        return Result.Success(order);
-    }
-}
-```
-
-When you need validation or transformation on constructor parameters, use a regular constructor instead.
-
-### Collection Expressions
-
-Use `[]` syntax for creating collections. The compiler picks the optimal backing type.
-
-```csharp
-// GOOD — collection expressions
-int[] numbers = [1, 2, 3, 4, 5];
-List<string> names = ["Alice", "Bob"];
-ReadOnlySpan<byte> bytes = [0x00, 0xFF];
-ImmutableArray<int> immutable = [10, 20, 30];
-
-// Spread operator
-int[] combined = [..first, ..second, 99];
-
-// Empty collection
-List<Order> orders = [];
-```
+| Feature | Usage | Example |
+|---------|-------|---------|
+| Primary constructors | DI injection, eliminate field assignments | `public class OrderService(IOrderRepo repo, TimeProvider clock) { }` |
+| Collection expressions | `[]` for all collection types + spread | `List<string> names = ["Alice", "Bob"];` / `int[] all = [..a, ..b, 99];` |
+| Records | DTOs, value objects, immutable data | `public record CreateOrderRequest(string CustomerId, List<OrderItem> Items);` |
+| `readonly record struct` | Small stack-allocated value types | `public readonly record struct Money(decimal Amount, string Currency);` |
+| Pattern matching | Switch expressions, list/property patterns | `order switch { { Total: > 1000 } => "Premium", _ => "Standard" };` |
+| List patterns | Deconstruct arrays/lists | `items switch { [] => "Empty", [var x] => $"One: {x}", [var f, .., var l] => $"{f}..{l}" };` |
+| `Span<T>` | Zero-allocation slicing | `ReadOnlySpan<char> trimmed = input.Trim(); int.TryParse(trimmed[4..], out id);` |
+| Raw string literals | Multi-line SQL, JSON, XML | `var sql = """ SELECT ... """;` / interpolated: `$$""" {"id": "{{id}}"} """;` |
+| `required` members | Enforce initialization | `public required string ConnectionString { get; init; }` |
+| `is` pattern + extraction | Null/type/property check | `if (result is { IsSuccess: true, Value: var order }) { ... }` |
 
 ### The `field` Keyword (C# 14)
 
@@ -141,119 +119,6 @@ public extension OrderExtensions for Order
 
     public string ToSummary() => $"Order #{Id}: {Total:C} ({Items.Count} items)";
 }
-```
-
-### Records
-
-Use records for DTOs, value objects, and any type where equality is based on data rather than identity.
-
-```csharp
-// GOOD — record for API request/response
-public record CreateOrderRequest(string CustomerId, List<OrderItem> Items);
-
-// GOOD — record struct for small value types (stack-allocated)
-public readonly record struct Money(decimal Amount, string Currency);
-
-// GOOD — record with validation via required + init
-public record Address
-{
-    public required string Street { get; init; }
-    public required string City { get; init; }
-    public required string PostalCode { get; init; }
-    public string? State { get; init; }
-}
-```
-
-### Pattern Matching
-
-Use pattern matching for type checks, deconstruction, and conditional logic.
-
-```csharp
-// GOOD — switch expression with patterns
-public static string Classify(Order order) => order switch
-{
-    { Total: 0 } => "Empty",
-    { Total: > 1000, Items.Count: > 10 } => "Bulk",
-    { Total: > 500 } => "Premium",
-    { Status: OrderStatus.Cancelled } => "Cancelled",
-    _ => "Standard"
-};
-
-// GOOD — list patterns
-public static string DescribeItems(int[] items) => items switch
-{
-    [] => "No items",
-    [var single] => $"Single item: {single}",
-    [var first, .., var last] => $"From {first} to {last}",
-};
-
-// GOOD — is pattern for null/type checking
-if (result is { IsSuccess: true, Value: var order })
-{
-    await ProcessOrder(order);
-}
-```
-
-### Spans and Memory
-
-Use `Span<T>` and `ReadOnlySpan<T>` for slicing without allocation.
-
-```csharp
-// GOOD — span for parsing without allocation
-public static bool TryParseOrderId(ReadOnlySpan<char> input, out int id)
-{
-    var trimmed = input.Trim();
-    if (trimmed.StartsWith("ORD-"))
-    {
-        return int.TryParse(trimmed[4..], out id);
-    }
-    id = 0;
-    return false;
-}
-```
-
-### Raw String Literals
-
-Use raw string literals for multi-line strings and content with special characters.
-
-```csharp
-// GOOD — raw string for SQL, JSON, XML
-var sql = """
-    SELECT o.Id, o.Total, c.Name
-    FROM Orders o
-    JOIN Customers c ON o.CustomerId = c.Id
-    WHERE o.Status = @status
-    ORDER BY o.CreatedAt DESC
-    """;
-
-// Interpolated raw strings
-var json = $$"""
-    {
-        "orderId": "{{orderId}}",
-        "total": {{total}}
-    }
-    """;
-```
-
-### `required` Members
-
-Use `required` to enforce initialization at construction time.
-
-```csharp
-// GOOD — required with class
-public class AppSettings
-{
-    public required string ConnectionString { get; init; }
-    public required string JwtSecret { get; init; }
-    public int MaxRetries { get; init; } = 3;
-}
-
-// Caller must provide required properties
-var settings = new AppSettings
-{
-    ConnectionString = "Server=...",
-    JwtSecret = "secret"
-};
 ```
 
 ## Anti-patterns

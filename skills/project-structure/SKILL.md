@@ -47,8 +47,6 @@ MyApp/
 
 ### Directory.Build.props
 
-Shared build properties applied to all projects in the directory tree.
-
 ```xml
 <Project>
   <PropertyGroup>
@@ -124,23 +122,6 @@ Shared build properties applied to all projects in the directory tree.
     "rollForward": "latestFeature"
   }
 }
-```
-
-### Global Usings
-
-```csharp
-// GlobalUsings.cs (per project, or in Directory.Build.props)
-global using System.ComponentModel.DataAnnotations;
-global using Microsoft.EntityFrameworkCore;
-global using Microsoft.AspNetCore.Http.HttpResults;
-```
-
-Or in Directory.Build.props:
-
-```xml
-<ItemGroup>
-  <Using Include="System.ComponentModel.DataAnnotations" />
-</ItemGroup>
 ```
 
 ### .slnx Solution Format

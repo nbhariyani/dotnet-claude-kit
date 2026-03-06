@@ -89,52 +89,10 @@ public class CorrelationIdMiddleware(RequestDelegate next)
 app.UseMiddleware<CorrelationIdMiddleware>();
 ```
 
-### OpenTelemetry Setup
+### OpenTelemetry Integration
 
-```csharp
-builder.Services.AddOpenTelemetry()
-    .ConfigureResource(r => r.AddService("MyApp.Api"))
-    .WithTracing(tracing =>
-    {
-        tracing
-            .AddAspNetCoreInstrumentation()
-            .AddHttpClientInstrumentation()
-            .AddEntityFrameworkCoreInstrumentation()
-            .AddOtlpExporter();
-    })
-    .WithMetrics(metrics =>
-    {
-        metrics
-            .AddAspNetCoreInstrumentation()
-            .AddHttpClientInstrumentation()
-            .AddRuntimeInstrumentation()
-            .AddOtlpExporter();
-    });
-```
-
-### Custom Metrics
-
-```csharp
-public class OrderMetrics
-{
-    private readonly Counter<int> _ordersCreated;
-    private readonly Histogram<double> _orderProcessingDuration;
-
-    public OrderMetrics(IMeterFactory meterFactory)
-    {
-        var meter = meterFactory.Create("MyApp.Orders");
-        _ordersCreated = meter.CreateCounter<int>("orders.created", "orders",
-            "Number of orders created");
-        _orderProcessingDuration = meter.CreateHistogram<double>("orders.processing.duration",
-            "ms", "Order processing duration");
-    }
-
-    public void OrderCreated() => _ordersCreated.Add(1);
-
-    public void RecordProcessingDuration(double milliseconds) =>
-        _orderProcessingDuration.Record(milliseconds);
-}
-```
+> For full OpenTelemetry setup (metrics, tracing, OTLP export), see the **opentelemetry** skill.
+> The logging skill focuses on structured logging with Serilog. OpenTelemetry handles the export pipeline.
 
 ### Health Checks
 

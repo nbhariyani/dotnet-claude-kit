@@ -262,28 +262,9 @@ logger.LogInformation("Order {OrderId} placed by customer {CustomerId}",
     order.Id, order.CustomerId);
 ```
 
-### Finding Report Format
-
-Each finding follows a consistent format:
-
-```markdown
-### [SEVERITY] File:Line — Title
-
-**OWASP Category:** A03:2021 Injection (if applicable)
-**Description:** What the vulnerability is
-**Impact:** What an attacker could do if this is exploited
-**Remediation:** Specific code change to fix this
-
-```csharp
-// Current (vulnerable)
-var query = $"SELECT * FROM Orders WHERE Id = '{id}'";
-
-// Fixed
-var order = await db.Orders.FindAsync(id);
-```
-```
-
 ### Full Scan Report
+
+Each finding uses format: `#### [SEVERITY] File:Line — Title` with OWASP Category, Description, Impact, and Remediation (with code before/after).
 
 ```markdown
 ## Security Scan Report
