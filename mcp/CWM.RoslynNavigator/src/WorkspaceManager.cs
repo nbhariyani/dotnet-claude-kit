@@ -11,8 +11,8 @@ namespace CWM.RoslynNavigator;
 
 /// <summary>
 /// Manages the MSBuildWorkspace lifecycle: loading, on-demand refresh, and compilation caching.
-/// File watching is intentionally avoided — on Linux/WSL, recursive FileSystemWatcher creates
-/// one inotify watch per subdirectory (including bin/obj/.git), quickly exhausting the kernel limit.
+/// File watching is intentionally avoided — on Linux, recursive FileSystemWatcher creates
+/// one inotify watch per subdirectory, quickly exhausting the kernel limit for large solutions.
 /// Instead, documents are refreshed on demand when tools are invoked.
 /// </summary>
 public sealed class WorkspaceManager : IDisposable
@@ -24,13 +24,15 @@ public sealed class WorkspaceManager : IDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly ConcurrentDictionary<ProjectId, Compilation> _compilationCache = new();
     private readonly ConcurrentDictionary<ProjectId, long> _cacheAccessOrder = new();
-    private readonly ConcurrentDictionary<DocumentId, DateTime> _knownFileTimestamps = new();
+    private readonly ConcurrentDictionary<DocumentId, DocumentInfo> _knownDocuments = new();
     private readonly ConcurrentDictionary<string, DateTime> _projectFileTimestamps = new();
     private readonly ConcurrentDictionary<string, byte> _knownDocumentPaths = new(StringComparer.OrdinalIgnoreCase);
     private long _accessCounter;
     private int _rootsAttempted; // 0 = not tried, 1 = tried
     private long _lastRefreshTicks;
+    private long _lastStructuralScanTicks;
     private static readonly long RefreshCooldownTicks = TimeSpan.FromSeconds(5).Ticks;
+    private static readonly long StructuralScanCooldownTicks = TimeSpan.FromSeconds(60).Ticks;
 
     private MSBuildWorkspace? _workspace;
     private Solution? _solution;
@@ -199,7 +201,6 @@ public sealed class WorkspaceManager : IDisposable
     {
         if (State == WorkspaceState.Ready)
         {
-            // Refresh any source files that changed since the last tool call
             await RefreshChangedDocumentsAsync(ct);
             return null;
         }
@@ -262,12 +263,14 @@ public sealed class WorkspaceManager : IDisposable
     /// <summary>
     /// Records the last-write time of every document and project file in the solution.
     /// Called once after solution load to establish a baseline for staleness detection.
+    /// Stores file paths and project IDs alongside timestamps to avoid Roslyn lookups
+    /// during the per-call refresh hot path.
     /// </summary>
     private void SnapshotFileTimestamps()
     {
         if (_solution is null) return;
 
-        _knownFileTimestamps.Clear();
+        _knownDocuments.Clear();
         _projectFileTimestamps.Clear();
         _knownDocumentPaths.Clear();
 
@@ -276,88 +279,98 @@ public sealed class WorkspaceManager : IDisposable
             var project = _solution.GetProject(projectId);
             if (project is null) continue;
 
-            if (project.FilePath is not null && File.Exists(project.FilePath))
+            if (project.FilePath is not null)
             {
                 _projectFileTimestamps[project.FilePath] = File.GetLastWriteTimeUtc(project.FilePath);
             }
 
             foreach (var document in project.Documents)
             {
-                if (document.FilePath is not null && File.Exists(document.FilePath))
-                {
-                    _knownFileTimestamps[document.Id] = File.GetLastWriteTimeUtc(document.FilePath);
-                    _knownDocumentPaths[document.FilePath] = 0;
-                }
+                if (document.FilePath is null) continue;
+
+                var writeTime = File.GetLastWriteTimeUtc(document.FilePath);
+                // GetLastWriteTimeUtc returns year 1601 for non-existent files
+                if (writeTime.Year < 1900) continue;
+
+                _knownDocuments[document.Id] = new DocumentInfo(document.FilePath, projectId, writeTime);
+                _knownDocumentPaths[document.FilePath] = 0;
             }
         }
 
         _logger.LogInformation("Captured timestamps for {Count} documents across {ProjectCount} projects",
-            _knownFileTimestamps.Count, _projectFileTimestamps.Count);
+            _knownDocuments.Count, _projectFileTimestamps.Count);
     }
 
-    /// <summary>
-    /// Refreshes the workspace to reflect on-disk changes. Skips if called within the
-    /// cooldown window (5s) to avoid expensive filesystem scans on rapid-fire tool calls.
-    /// Checks .csproj timestamps first (cheap), then scans for new files, then does
-    /// incremental text updates for modified documents.
-    /// </summary>
-    public async Task<bool> RefreshChangedDocumentsAsync(CancellationToken ct = default)
-    {
-        if (_solution is null || _solutionPath is null) return false;
+    private readonly record struct DocumentInfo(string FilePath, ProjectId ProjectId, DateTime LastWriteUtc);
 
-        // Skip if we refreshed recently — MCP tool calls often come in bursts
+    /// <summary>
+    /// Refreshes the workspace to reflect on-disk changes. Uses tiered cooldowns to
+    /// keep per-call overhead low: .csproj + document timestamps every 5s, full
+    /// directory scan for new files every 60s.
+    /// </summary>
+    public async Task RefreshChangedDocumentsAsync(CancellationToken ct = default)
+    {
+        if (_solution is null || _solutionPath is null) return;
+
         var now = DateTime.UtcNow.Ticks;
-        var last = Interlocked.Read(ref _lastRefreshTicks);
-        if (now - last < RefreshCooldownTicks) return false;
+
+        var lastRefresh = Interlocked.Read(ref _lastRefreshTicks);
+        if (now - lastRefresh < RefreshCooldownTicks) return;
         Interlocked.Exchange(ref _lastRefreshTicks, now);
 
-        // Phase 1: check .csproj timestamps (cheap — just a few stat calls)
+        // Phase 1: check .csproj timestamps (one stat per project)
         if (HasProjectFileChanged())
         {
             _logger.LogInformation("Project file changed. Full reload needed.");
             _compilationCache.Clear();
             _cacheAccessOrder.Clear();
             await LoadSolutionAsync(_solutionPath, ct);
-            return true;
+            return;
         }
 
-        // Phase 2: check for new source files (uses EnumerationOptions to skip bin/obj at the OS level)
-        if (HasNewSourceFiles())
+        // Phase 2: scan for new source files (expensive directory walk, longer cooldown)
+        var lastStructural = Interlocked.Read(ref _lastStructuralScanTicks);
+        if (now - lastStructural >= StructuralScanCooldownTicks)
         {
-            _logger.LogInformation("New source files detected. Full reload needed.");
-            _compilationCache.Clear();
-            _cacheAccessOrder.Clear();
-            await LoadSolutionAsync(_solutionPath, ct);
-            return true;
+            Interlocked.Exchange(ref _lastStructuralScanTicks, now);
+            if (HasNewSourceFiles())
+            {
+                _logger.LogInformation("New source files detected. Full reload needed.");
+                _compilationCache.Clear();
+                _cacheAccessOrder.Clear();
+                await LoadSolutionAsync(_solutionPath, ct);
+                return;
+            }
         }
 
-        // Phase 3: incremental text updates for modified existing documents.
+        // Phase 3: collect changed documents without holding the lock (stat calls are
+        // the expensive part — keeping them lock-free avoids blocking concurrent tool calls).
+        var changed = new List<(DocumentId Id, DocumentInfo Info)>();
+        foreach (var (docId, info) in _knownDocuments)
+        {
+            var currentWriteTime = File.GetLastWriteTimeUtc(info.FilePath);
+            if (currentWriteTime > info.LastWriteUtc)
+                changed.Add((docId, info with { LastWriteUtc = currentWriteTime }));
+        }
+
+        if (changed.Count == 0) return;
+
+        // Apply mutations under lock.
         await _writeLock.WaitAsync(ct);
         try
         {
-            var refreshed = false;
-
-            foreach (var (docId, lastKnown) in _knownFileTimestamps)
+            foreach (var (docId, info) in changed)
             {
-                var document = _solution.GetDocument(docId);
-                if (document?.FilePath is null) continue;
-
-                var currentWriteTime = File.GetLastWriteTimeUtc(document.FilePath);
-                if (currentWriteTime <= lastKnown) continue;
-
-                var text = await File.ReadAllTextAsync(document.FilePath, ct);
+                var text = await File.ReadAllTextAsync(info.FilePath, ct);
                 var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(text);
                 _solution = _solution.WithDocumentText(docId, sourceText);
-                _knownFileTimestamps[docId] = currentWriteTime;
+                _knownDocuments[docId] = info;
 
-                _compilationCache.TryRemove(document.Project.Id, out _);
-                _cacheAccessOrder.TryRemove(document.Project.Id, out _);
+                _compilationCache.TryRemove(info.ProjectId, out _);
+                _cacheAccessOrder.TryRemove(info.ProjectId, out _);
 
-                refreshed = true;
-                _logger.LogDebug("Refreshed changed document: {Path}", document.FilePath);
+                _logger.LogDebug("Refreshed changed document: {Path}", info.FilePath);
             }
-
-            return refreshed;
         }
         finally
         {
@@ -369,7 +382,8 @@ public sealed class WorkspaceManager : IDisposable
     {
         foreach (var (path, lastKnown) in _projectFileTimestamps)
         {
-            if (File.Exists(path) && File.GetLastWriteTimeUtc(path) > lastKnown)
+            // GetLastWriteTimeUtc returns year 1601 for missing files — always < lastKnown
+            if (File.GetLastWriteTimeUtc(path) > lastKnown)
                 return true;
         }
         return false;
@@ -394,12 +408,15 @@ public sealed class WorkspaceManager : IDisposable
             var projectDir = Path.GetDirectoryName(project.FilePath);
             if (projectDir is null || !Directory.Exists(projectDir)) continue;
 
+            // Pre-compute bin/obj prefixes to avoid per-file Path.GetRelativePath allocation
+            var sep = Path.DirectorySeparatorChar;
+            var binPrefix = $"{projectDir}{sep}bin{sep}";
+            var objPrefix = $"{projectDir}{sep}obj{sep}";
+
             foreach (var file in Directory.EnumerateFiles(projectDir, "*.cs", options))
             {
-                // Skip bin/obj — check cheaply via span to avoid allocation
-                var relative = Path.GetRelativePath(projectDir, file);
-                if (relative.StartsWith("bin", StringComparison.OrdinalIgnoreCase) ||
-                    relative.StartsWith("obj", StringComparison.OrdinalIgnoreCase))
+                if (file.StartsWith(binPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    file.StartsWith(objPrefix, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 if (!_knownDocumentPaths.ContainsKey(file))
