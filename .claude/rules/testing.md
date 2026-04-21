@@ -1,67 +1,81 @@
 ---
 alwaysApply: true
 description: >
-  Enforces testing strategy, patterns, and naming conventions for .NET
-  projects using xUnit v3, WebApplicationFactory, and Testcontainers.
+  NestJS testing rules: E2E-first strategy, real databases via Testcontainers,
+  no SQLite in-memory, AAA pattern, and test naming conventions.
 ---
 
-# Testing Rules
+# Testing Rules (NestJS)
 
-## Strategy
+## E2E Tests First
 
-- **Integration tests first.** Use `WebApplicationFactory` + Testcontainers to test real HTTP pipelines against real databases. Integration tests catch the bugs that unit tests miss — serialization, middleware, DI wiring, and query behavior.
-- **No in-memory database for testing.** `UseInMemoryDatabase` has different behavior from real providers (no constraints, no transactions, no SQL translation). Use Testcontainers to spin up the real database engine.
+- **DO** write SuperTest E2E tests before unit tests for HTTP-driven features.
+  Rationale: A single E2E test covers routing, guards, pipes, interceptors, business
+  logic, and database together — catching integration bugs that unit tests miss.
 
-```csharp
-// DO — real PostgreSQL via Testcontainers
-public sealed class DatabaseFixture : IAsyncLifetime
-{
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder().Build();
-    public string ConnectionString => _container.GetConnectionString();
-    public Task InitializeAsync() => _container.StartAsync();
-    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
-}
+- **DO** use `@testcontainers/postgresql` for real PostgreSQL in E2E tests.
+  Rationale: SQLite in-memory has different behavior from PostgreSQL (no transactions
+  with proper isolation, no constraints, no JSON types, no serial/UUID defaults).
+
+```typescript
+// DO
+const container = await new PostgreSqlContainer().start();
 
 // DON'T
-options.UseInMemoryDatabase("TestDb");
+TypeOrmModule.forRoot({ type: 'sqlite', database: ':memory:' })
 ```
 
 ## Test Structure
 
-- **AAA pattern with clear separation.** Arrange, Act, Assert — separated by blank lines. Each section should be immediately identifiable.
+- **DO** follow the AAA pattern with blank lines separating each section.
+  Rationale: Consistent structure makes tests readable and failures easy to locate.
 
-```csharp
-[Fact]
-public async Task CreateOrder_ValidRequest_ReturnsCreated()
-{
-    // Arrange
-    var client = _factory.CreateClient();
-    var request = new CreateOrderRequest("SKU-1", Quantity: 2);
+```typescript
+it('create_validRequest_returns201', async () => {
+  // Arrange
+  const dto = { customerId: 'c-1', items: [{ productId: 'p-1', qty: 2 }] };
 
-    // Act
-    var response = await client.PostAsJsonAsync("/orders", request);
+  // Act
+  const response = await request(app.getHttpServer()).post('/orders').send(dto);
 
-    // Assert
-    response.StatusCode.Should().Be(HttpStatusCode.Created);
-}
+  // Assert
+  expect(response.status).toBe(201);
+  expect(response.body.id).toBeDefined();
+});
 ```
 
-- **One assertion concept per test.** You may assert multiple properties of the same result, but do not test two separate behaviors in one test. Separate behaviors need separate tests so failures are specific.
-
-## Naming
-
-- **Test naming: `MethodName_Scenario_ExpectedResult`.** Clear, searchable, and self-documenting. The test name is the specification.
-
-```
-GetOrderAsync_OrderDoesNotExist_ReturnsNull
-CreateOrder_DuplicateSku_ThrowsConflictException
-```
+- **DO** name tests: `unitOfWork_stateOrInput_expectedBehavior`.
+  Rationale: Test names are specifications. They must be greppable and self-documenting.
 
 ## Fixtures and Mocking
 
-- **Shared fixtures for expensive setup.** Database containers, HTTP servers, and message brokers should be shared across tests using `IClassFixture<T>` or `ICollectionFixture<T>`. Starting a container per test is wasteful.
-- **No mocking frameworks for things you own.** If you control the code, use a real or test implementation. Mocking your own interfaces couples tests to implementation details and makes refactoring painful. Reserve mocks for third-party boundaries you cannot control.
+- **DO** use `beforeAll` (not `beforeEach`) for expensive setup like DB containers.
+  Rationale: Starting a new container per test adds minutes of overhead.
 
-## Behavior Over Implementation
+- **DO** use `createTestingModule` with mock providers for unit tests.
+  Rationale: Unit tests should be fast and isolated; real DI trees are slow.
 
-- **Test behavior, not implementation details.** Assert on the observable outcome (HTTP response, database state, published event), not on which internal methods were called. Tests coupled to internals break on every refactor.
+- **DON'T** mock your own services in E2E tests.
+  Rationale: E2E tests exist to test the real integration. Mocking defeats the purpose.
+
+## Mirror Production Setup in E2E
+
+- **DO** apply the same global pipes, filters, and interceptors in test setup.
+  Rationale: Tests that don't apply `ValidationPipe` pass when the real app rejects
+  the same request.
+
+```typescript
+app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+app.useGlobalFilters(new AllExceptionsFilter());
+await app.init();
+```
+
+## Quick Reference
+
+| Scenario | Recommendation |
+|---|---|
+| HTTP endpoint behavior | SuperTest E2E + Testcontainers |
+| Service logic (no DB) | Unit test + `createTestingModule` + mock repo |
+| Guard / interceptor | Unit test + mock `ExecutionContext` |
+| Time-dependent logic | `jest.useFakeTimers()` |
+| Expensive setup (DB) | `beforeAll` + `afterAll`, never `beforeEach` |

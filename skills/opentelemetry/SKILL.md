@@ -1,271 +1,218 @@
 ---
 name: opentelemetry
 description: >
-  OpenTelemetry observability for .NET 10 applications. Covers traces, metrics,
-  and logs using the OpenTelemetry SDK with OTLP export. Includes custom
-  ActivitySource, IMeterFactory metrics, resource configuration, and Aspire
-  Dashboard integration.
-  Load this skill when setting up distributed tracing, custom metrics, OTLP
-  export, or when the user mentions "OpenTelemetry", "OTLP", "traces", "spans",
-  "Activity", "ActivitySource", "metrics", "IMeterFactory", "Meter", "Counter",
-  "Histogram", "Gauge", "telemetry", "observability", "distributed tracing",
-  "OTEL", or "Aspire Dashboard".
+  OpenTelemetry observability for NestJS: distributed tracing, metrics, and log
+  correlation. Load this skill when working with opentelemetry, otel, tracing,
+  spans, Jaeger, Prometheus, nestjs-otel, @Span decorator, or distributed tracing.
 ---
-
-# OpenTelemetry
 
 ## Core Principles
 
-1. **Three pillars, one setup** — Configure traces, metrics, and logs through a single `AddOpenTelemetry()` call. Use `UseOtlpExporter()` for cross-cutting export to any OTLP-compatible backend.
-2. **Use `IMeterFactory` for metrics** — Never create `Meter` instances with `new`. The factory manages lifetime through DI and prevents leaks.
-3. **Null-safe activities** — `StartActivity()` returns `null` when no listener is attached. Always use `?.` when setting tags or events.
-4. **Environment variables over code** — Use `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` so deployments control telemetry routing without code changes.
-5. **Low-cardinality metric tags** — Keep metric tag combinations under ~1000 per instrument. Use span attributes or logs for high-cardinality data like user IDs or request IDs.
+1. **Initialize the OTel SDK before NestFactory.** `NodeSDK.start()` patches Node.js
+   internals and third-party modules. If `NestFactory.create()` runs first, HTTP,
+   database, and cache spans are never captured.
+
+2. **Import tracing.ts as the very first line in main.ts.** This ensures the SDK is
+   started even before NestJS bootstrap code executes.
+
+3. **Correlate trace IDs with logs.** Every log line should include the active
+   `traceId` and `spanId`. Without this correlation, traces and logs are disconnected
+   and debugging across services is guesswork.
+
+4. **Use @Span() for service-layer operations.** HTTP spans are auto-instrumented.
+   Business operations (order creation, payment processing) need manual `@Span()`
+   decoration to appear in traces.
+
+5. **Export metrics to Prometheus, traces to OTLP.** Prometheus scrapes are the
+   de facto standard for metrics in Kubernetes. OTLP is the standard protocol for
+   traces; use it to send to Jaeger, Grafana Tempo, or any backend.
 
 ## Patterns
 
-### Full Setup with All Three Signals
+### tracing.ts — Must Be First
 
-```csharp
-// Program.cs
-var builder = WebApplication.CreateBuilder(args);
+```typescript
+// src/tracing.ts
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+import { Resource } from '@opentelemetry/resources';
+import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 
-builder.Services.AddOpenTelemetry()
-    .ConfigureResource(resource => resource
-        .AddService(
-            serviceName: builder.Environment.ApplicationName,
-            serviceVersion: "1.0.0"))
-    .WithTracing(tracing => tracing
-        .AddAspNetCoreInstrumentation()
-        .AddHttpClientInstrumentation()
-        .AddEntityFrameworkCoreInstrumentation()
-        .AddSource("MyApp.Orders"))
-    .WithMetrics(metrics => metrics
-        .AddAspNetCoreInstrumentation()
-        .AddHttpClientInstrumentation()
-        .AddRuntimeInstrumentation()
-        .AddMeter("MyApp.Orders"))
-    .WithLogging(logging => logging
-        .AddOtlpExporter());
+const sdk = new NodeSDK({
+  resource: new Resource({
+    [ATTR_SERVICE_NAME]: process.env['APP_NAME'] ?? 'nestjs-app',
+    [ATTR_SERVICE_VERSION]: process.env['npm_package_version'] ?? '0.0.0',
+  }),
+  traceExporter: new OTLPTraceExporter({
+    url: process.env['OTEL_EXPORTER_OTLP_ENDPOINT'] ?? 'http://localhost:4318/v1/traces',
+  }),
+  metricReader: new PrometheusExporter({ port: 9464 }),
+  instrumentations: [
+    getNodeAutoInstrumentations({
+      '@opentelemetry/instrumentation-fs': { enabled: false }, // too verbose
+    }),
+  ],
+});
 
-// Cross-cutting OTLP export for traces + metrics (configured via env vars)
-builder.Services.AddOpenTelemetry()
-    .UseOtlpExporter();
+sdk.start();
+
+process.on('SIGTERM', async () => {
+  await sdk.shutdown();
+  process.exit(0);
+});
 ```
 
-The OTLP endpoint defaults to `http://localhost:4317` (gRPC). Override via:
+### main.ts — Import Tracing First
+
+```typescript
+// src/main.ts
+import './tracing';  // MUST be the first import — before any NestJS import
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create(AppModule);
+  // ... rest of setup
+  await app.listen(3000);
+}
+
+bootstrap();
 ```
-OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
-OTEL_SERVICE_NAME=MyApp.Api
+
+### OpenTelemetryModule in AppModule (nestjs-otel)
+
+```typescript
+// src/app.module.ts
+import { OpenTelemetryModule } from 'nestjs-otel';
+
+@Module({
+  imports: [
+    OpenTelemetryModule.forRoot({
+      metrics: {
+        hostMetrics: true,    // CPU, memory, event loop lag
+        apiMetrics: {
+          enable: true,       // HTTP request duration, count, status codes
+          ignoreRoutes: ['/health', '/metrics'],
+        },
+      },
+    }),
+    // ... other modules
+  ],
+})
+export class AppModule {}
 ```
 
-### Custom Metrics with IMeterFactory
+### @Span Decorator on Service Methods
 
-Register a metrics class as a singleton. `IMeterFactory` handles `Meter` disposal through DI.
+```typescript
+// src/orders/orders.service.ts
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { Span, TraceService } from 'nestjs-otel';
+import { SpanStatusCode } from '@opentelemetry/api';
 
-```csharp
-public sealed class OrderMetrics
-{
-    private readonly Counter<int> _ordersCreated;
-    private readonly Histogram<double> _orderDuration;
-    private readonly UpDownCounter<int> _activeOrders;
-    private readonly Gauge<double> _queueDepth;
+@Injectable()
+export class OrdersService {
+  constructor(
+    private readonly traceService: TraceService,
+    private readonly orderRepository: OrderRepository,
+  ) {}
 
-    public OrderMetrics(IMeterFactory meterFactory)
-    {
-        var meter = meterFactory.Create("MyApp.Orders");
+  @Span('orders.create')
+  async create(dto: CreateOrderDto): Promise<Order> {
+    const span = this.traceService.getSpan();
+    span?.setAttribute('order.customerId', dto.customerId);
+    span?.setAttribute('order.itemCount', dto.items.length);
 
-        _ordersCreated = meter.CreateCounter<int>(
-            "myapp.orders.created", "{orders}", "Number of orders created");
-
-        _orderDuration = meter.CreateHistogram<double>(
-            "myapp.orders.duration", "s", "Order processing duration",
-            advice: new InstrumentAdvice<double>
-            {
-                HistogramBucketBoundaries = [0.01, 0.05, 0.1, 0.5, 1, 5, 10]
-            });
-
-        _activeOrders = meter.CreateUpDownCounter<int>(
-            "myapp.orders.active", "{orders}", "Currently active orders");
-
-        _queueDepth = meter.CreateGauge<double>(
-            "myapp.orders.queue_depth", "{items}", "Current queue depth");
+    try {
+      const order = await this.orderRepository.save(dto);
+      span?.setAttribute('order.id', order.id);
+      return order;
+    } catch (err) {
+      span?.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+      throw err;
     }
-
-    public void OrderCreated() => _ordersCreated.Add(1);
-    public void RecordDuration(double seconds) => _orderDuration.Record(seconds);
-    public void OrderStarted() => _activeOrders.Add(1);
-    public void OrderCompleted() => _activeOrders.Add(-1);
-    public void SetQueueDepth(double depth) => _queueDepth.Record(depth);
+  }
 }
-
-// Registration
-builder.Services.AddSingleton<OrderMetrics>();
 ```
 
-### Multi-Dimensional Metric Tags
+### Log Correlation with Trace IDs (pino)
 
-Three or fewer tags are allocation-free. For more, use `TagList`.
+```typescript
+// src/common/interceptors/trace-context.interceptor.ts
+import { Injectable, NestInterceptor, ExecutionContext, CallHandler } from '@nestjs/common';
+import { Observable } from 'rxjs';
+import { context, trace } from '@opentelemetry/api';
+import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
 
-```csharp
-// Allocation-free (3 or fewer tags)
-_ordersCreated.Add(1,
-    new KeyValuePair<string, object?>("order.type", "standard"),
-    new KeyValuePair<string, object?>("payment.method", "credit_card"));
+@Injectable()
+export class TraceContextInterceptor implements NestInterceptor {
+  constructor(
+    @InjectPinoLogger(TraceContextInterceptor.name)
+    private readonly logger: PinoLogger,
+  ) {}
 
-// 4+ tags — use TagList to avoid allocations
-var tags = new TagList
-{
-    { "order.type", "standard" },
-    { "payment.method", "credit_card" },
-    { "region", "us-east" },
-    { "priority", "high" }
-};
-_ordersCreated.Add(1, tags);
-```
-
-### Custom ActivitySource for Distributed Tracing
-
-```csharp
-public sealed class OrderService(ILogger<OrderService> logger)
-{
-    private static readonly ActivitySource Source = new("MyApp.Orders");
-
-    public async Task<Order> ProcessOrderAsync(CreateOrderRequest request, CancellationToken ct)
-    {
-        using var activity = Source.StartActivity("ProcessOrder", ActivityKind.Internal);
-        activity?.SetTag("order.customer_id", request.CustomerId);
-
-        try
-        {
-            await ValidateOrder(request, ct);
-            activity?.AddEvent(new ActivityEvent("OrderValidated"));
-
-            var order = await SaveOrder(request, ct);
-            activity?.SetTag("order.id", order.Id.ToString());
-            activity?.SetStatus(ActivityStatusCode.Ok);
-            return order;
-        }
-        catch (Exception ex)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            activity?.RecordException(ex);
-            throw;
-        }
+  intercept(ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const span = trace.getSpan(context.active());
+    if (span) {
+      const { traceId, spanId } = span.spanContext();
+      this.logger.assign({ traceId, spanId });
     }
+    return next.handle();
+  }
 }
 ```
-
-Register the source: `.AddSource("MyApp.Orders")` in the tracing builder.
-
-### Aspire Dashboard for Local Development
-
-Run the standalone Aspire Dashboard without Aspire orchestration:
-
-```bash
-docker run --rm -it -p 18888:18888 -p 4317:18889 \
-    mcr.microsoft.com/dotnet/aspire-dashboard:latest
-```
-
-Then point your app at it:
-```
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-```
-
-Dashboard UI is at `http://localhost:18888`.
-
-### Source-Generated Logging with OTel
-
-For maximum performance, use `[LoggerMessage]` — eliminates boxing and allocations.
-
-```csharp
-public partial class OrderService(ILogger<OrderService> logger)
-{
-    [LoggerMessage(Level = LogLevel.Information,
-        Message = "Processing order {OrderId} for customer {CustomerId}")]
-    partial void LogOrderProcessing(Guid orderId, Guid customerId);
-}
-```
-
-OpenTelemetry logging automatically includes `TraceId` and `SpanId` when an `Activity` is current.
 
 ## Anti-patterns
 
-### Don't Create Meters Per Request
+### Initializing OTel After NestFactory
 
-```csharp
-// BAD — new Meter per request causes memory leaks
-public void HandleRequest()
-{
-    var meter = new Meter("MyApp");
-    meter.CreateCounter<int>("requests").Add(1);
+```typescript
+// BAD — HTTP, TypeORM, Redis spans are never captured
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { NodeSDK } from '@opentelemetry/sdk-node';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule); // too late
+  const sdk = new NodeSDK({ ... });
+  sdk.start();
 }
 
-// GOOD — singleton via IMeterFactory
-public class MyMetrics(IMeterFactory meterFactory)
-{
-    private readonly Counter<int> _requests =
-        meterFactory.Create("MyApp").CreateCounter<int>("myapp.requests");
-    public void RequestHandled() => _requests.Add(1);
-}
+// GOOD — see tracing.ts pattern above; import it first
+import './tracing';
+import { NestFactory } from '@nestjs/core';
 ```
 
-### Don't Skip Null Checks on Activity
+### No Trace-Log Correlation
 
-```csharp
-// BAD — NullReferenceException when no listener is attached
-using var activity = source.StartActivity("Work");
-activity.SetTag("key", "value");
+```typescript
+// BAD — traces in Jaeger, logs in Loki, no way to find logs for a specific trace
+this.logger.log('Order created');  // no traceId
 
-// GOOD — null-safe
-activity?.SetTag("key", "value");
+// GOOD — inject traceId into every log line
+this.logger.assign({ traceId, spanId });
+this.logger.log('Order created');  // traceId: abc123 appears in Loki
 ```
 
-### Don't Use High-Cardinality Metric Tags
+### Tracing Only HTTP (Missing Business Spans)
 
-```csharp
-// BAD — unbounded cardinality causes memory explosion in collectors
-_counter.Add(1, new("request.id", Guid.NewGuid().ToString()));
-_counter.Add(1, new("user.id", userId));
-
-// GOOD — low-cardinality dimensions only
-_counter.Add(1, new("http.method", "GET"), new("http.status_code", 200));
-```
-
-### Don't Mix UseOtlpExporter with AddOtlpExporter
-
-```csharp
-// BAD — throws NotSupportedException at runtime
-builder.Services.AddOpenTelemetry()
-    .UseOtlpExporter()
-    .WithTracing(t => t.AddOtlpExporter());
-
-// GOOD — use one approach
-builder.Services.AddOpenTelemetry().UseOtlpExporter();
-```
-
-### Don't Forget to Register Custom Sources
-
-```csharp
-// BAD — activities silently dropped (no listener registered)
-var source = new ActivitySource("MyApp.Custom");
-using var activity = source.StartActivity("Work"); // null!
-
-// GOOD — register in the tracing builder
-otel.WithTracing(t => t.AddSource("MyApp.Custom"));
-otel.WithMetrics(m => m.AddMeter("MyApp.Custom"));
+```typescript
+// BAD — trace shows HTTP call but nothing about what happened inside
+// GOOD — @Span() on service methods gives visibility into business operations
+@Span('payments.charge')
+async charge(amount: number): Promise<ChargeResult> { ... }
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Full observability setup | `AddOpenTelemetry()` with all three signals + `UseOtlpExporter()` |
-| Custom business metrics | `IMeterFactory` + singleton metrics class |
-| Custom trace spans | `ActivitySource` + `StartActivity()` |
-| Local development backend | Aspire Dashboard standalone container |
-| Production backend | OTel Collector as intermediary to Grafana/Datadog/etc. |
-| Sampling in production | `OTEL_TRACES_SAMPLER=parentbased_traceidratio` with 10% ratio |
-| High-performance logging | `[LoggerMessage]` source generator |
-| Metric tag cardinality | Max ~1000 combinations per instrument |
-| Environment configuration | `OTEL_*` env vars (also work via `appsettings.json`) |
+|---|---|
+| New project setup | Add tracing.ts + `import './tracing'` before any other setup |
+| HTTP metrics (duration, status) | `OpenTelemetryModule.forRoot` with `apiMetrics.enable: true` |
+| Business operation visibility | `@Span('operation.name')` on service methods |
+| Trace → log correlation | `TraceContextInterceptor` + pino `assign()` |
+| Exporting traces | OTLPTraceExporter to Jaeger / Grafana Tempo |
+| Exporting metrics | PrometheusExporter on port 9464; scrape via ServiceMonitor |
+| K8s sidecar vs agent | OTEL Collector sidecar recommended for production |

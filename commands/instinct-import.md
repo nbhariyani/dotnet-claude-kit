@@ -15,7 +15,7 @@ Import instincts from an exported file and merge them with the current project's
 - Starting a new project with learnings from a previous one
 - Onboarding a repository with team-wide instinct baselines
 - Restoring instincts after a project restructuring
-- Cross-pollinating patterns between related projects
+- Cross-pollinating patterns between related NestJS projects
 
 ## How
 
@@ -45,13 +45,13 @@ User: /instinct-import .claude/instincts-export.md
 Claude: Importing instincts from .claude/instincts-export.md...
 
 Imported (5 new, confidence decayed by 0.2):
-  - Use vertical slice architecture (0.9 -> 0.7)
-  - Explicit mapping over AutoMapper (0.8 -> 0.6)
-  - Always add CancellationToken (0.8 -> 0.6)
+  - Use Feature Modules architecture (0.9 -> 0.7)
+  - Explicit mapping over @Expose() (0.8 -> 0.6)
+  - Always pass CancellationToken (0.8 -> 0.6)
 
 Merged (2 existing, kept higher confidence):
-  - Prefer records for DTOs (existing: 0.7, imported: 0.5 -> kept 0.7)
-  - Use TimeProvider over DateTime (existing: 0.6, imported: 0.5 -> kept 0.6)
+  - Prefer readonly class properties (existing: 0.7, imported: 0.5 -> kept 0.7)
+  - Use ConfigService over process.env (existing: 0.6, imported: 0.5 -> kept 0.6)
 
 No conflicts detected. Total instincts: 14
 ```

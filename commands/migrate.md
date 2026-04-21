@@ -1,146 +1,107 @@
 ---
 description: >
-  Guided, safe EF Core migration workflow. Reviews pending model changes, generates
-  a migration with a descriptive name, reviews the generated SQL for safety, and
-  applies with rollback readiness. Invoke when: "add migration", "update database",
-  "create migration", "schema change", "new table", "rename column".
+  Database migration workflow for NestJS projects using TypeORM or Prisma. Detects
+  which ORM is in use and runs the correct migration commands. Validates safety before
+  running in production. Triggers on: "run migrations", "create migration",
+  "migrate database", "apply schema changes".
 ---
 
 # /migrate
 
 ## What
 
-Guided EF Core migration workflow that takes you from model change to applied
-migration safely. It reviews what changed in your entity model, creates a
-properly named migration, reviews the generated SQL for data loss and locking
-risks, and applies it with a documented rollback path.
-
-This command enforces the "one logical change per migration" principle and
-prevents the most common migration mistakes: blind application, data loss,
-and un-rollbackable batched changes.
+Detects whether the project uses TypeORM or Prisma, then runs the correct migration
+commands. Includes a pre-run safety checklist and post-run verification to prevent
+data loss from unreviewed migrations.
 
 ## When
 
-- After modifying entity classes, DbContext configuration, or relationships
-- User says: "add migration", "update database", "create migration"
-- After adding a new entity or table
-- After renaming, removing, or changing column types
-- After modifying indexes or constraints
-- When the user needs to generate SQL scripts for DBA review
+- "run migrations"
+- "create a migration"
+- "migrate the database"
+- "apply schema changes"
+- After modifying entities or the Prisma schema
 
 ## How
 
-### Step 1: Assess Current State
+### Step 1: Detect ORM
+
+Check `package.json` dependencies:
+- `typeorm` present → TypeORM workflow
+- `@prisma/client` present → Prisma workflow
+- Both present → ask which to use
+
+### Step 2: Generate Migration
+
+**TypeORM:**
 
 ```bash
-dotnet ef migrations list --project <InfraProject> --startup-project <ApiProject>
+npx typeorm migration:generate -d src/data-source.ts src/migrations/<DescriptiveName>
 ```
+
+**Prisma:**
+
+```bash
+npx prisma migrate dev --name <descriptive-name>
+```
+
+### Step 3: Review Generated Migration
+
+**Always review generated SQL before running.** For TypeORM, open the generated
+migration file and inspect the `up()` method. For Prisma, review the `.sql` file
+in `prisma/migrations/`.
 
 Check for:
-- Pending migrations not yet applied to the development database
-- Model changes that have not been captured in a migration yet
+- Destructive operations (`DROP COLUMN`, `DROP TABLE`) — are these intentional?
+- Large table rewrites — will this lock the table in production?
+- Missing data backfill for new NOT NULL columns
 
-### Step 2: Review Model Changes
+### Step 4: Pre-Run Checklist
 
-Use MCP tools to understand what changed:
+Before running against staging or production:
 
-```
-find_symbol(name: entity or DbSet name) -- locate the changed entity
-get_type_hierarchy(typeName: entity) -- check inheritance changes
-find_references(symbolName: changed property) -- assess downstream impact
-```
+- [ ] Database backup exists and is recent
+- [ ] Rollback plan is documented (the `down()` method or reverting the deploy)
+- [ ] Migration is zero-downtime compatible (no table locks blocking the running app)
+- [ ] Migration has been tested against a production-equivalent data set
 
-Confirm the change is a single logical unit. If not, guide the user to split
-into multiple migrations.
+### Step 5: Run Migration
 
-### Step 3: Generate Migration
-
-Create with a descriptive name that explains the change, not the entity:
+**TypeORM:**
 
 ```bash
-dotnet ef migrations add <DescriptiveName> --project <InfraProject> --startup-project <ApiProject>
+# Development
+npx typeorm migration:run -d src/data-source.ts
+
+# Production (via CI/CD)
+node dist/data-source.js migration:run
 ```
 
-Naming convention: `Add|Remove|Rename|Modify` + `WhatChanged`
-- `AddOrderShippingAddress`
-- `RenameCustomerEmailToContactEmail`
-- `AddIndexOnOrderCreatedAt`
-- `RemoveDeprecatedProductSku`
-
-### Step 4: Review Generated SQL
+**Prisma:**
 
 ```bash
-dotnet ef migrations script --idempotent --project <InfraProject> --startup-project <ApiProject>
+# Development
+npx prisma migrate dev
+
+# Production
+npx prisma migrate deploy
 ```
 
-Flag and report:
-- **DROP COLUMN / DROP TABLE** -- Confirm data loss is intentional
-- **ALTER COLUMN** type changes -- Check for precision loss or truncation
-- **Large table ALTER** -- Warn about potential lock duration
-- **Missing DEFAULT** -- New non-nullable columns need defaults for existing rows
+### Step 6: Post-Run Verification
 
-If data transformation is needed, guide the user through a multi-step migration
-(add nullable column, copy data, set non-nullable, drop old column).
+Spot-check key tables: row counts reasonable, new columns populated, constraints active.
 
-### Step 5: Apply Migration
+## Example — TypeORM vs Prisma Side by Side
 
-```bash
-dotnet ef database update --project <InfraProject> --startup-project <ApiProject>
-```
-
-### Step 6: Verify
-
-```bash
-dotnet build
-dotnet test
-```
-
-Document the rollback command for this migration:
-
-```bash
-dotnet ef database update <PreviousMigrationName> --project <InfraProject> --startup-project <ApiProject>
-```
-
-## Invokes
-
-| Type  | Name                  | Purpose                                      |
-|-------|-----------------------|----------------------------------------------|
-| Skill | `migration-workflow`  | Safe migration patterns and rollback strategy |
-| Skill | `ef-core`             | Entity configuration and query patterns       |
-| Agent | `ef-core-specialist`  | Database design and migration expertise       |
-
-### MCP Tools Used
-
-- `find_symbol` -- Locate entity types, DbContext, and configurations
-- `get_type_hierarchy` -- Understand entity inheritance for TPH/TPT/TPC
-- `find_references` -- Assess impact of schema changes on queries
-- `get_diagnostics` -- Catch EF Core warnings after migration generation
-
-## Example
-
-```
-User: /migrate
-
-Claude: Checking migration state...
-  Last applied: 20250710_AddOrderTable
-  Model changes detected: new ShippingAddress property on Order entity.
-
-  Creating migration: AddOrderShippingAddress
-  Reviewing generated SQL...
-
-  SQL Review:
-  - ALTER TABLE "Orders" ADD "ShippingStreet" text NULL
-  - ALTER TABLE "Orders" ADD "ShippingCity" text NULL
-  - ALTER TABLE "Orders" ADD "ShippingZip" text NULL
-  No data loss. No locking risk. Safe to apply.
-
-  Applying migration... Done.
-  Build: green. Tests: 34/34 passed.
-
-  Rollback command (if needed):
-  dotnet ef database update AddOrderTable --project src/Infrastructure --startup-project src/Api
-```
+| Step | TypeORM | Prisma |
+|---|---|---|
+| Generate | `migration:generate -d src/data-source.ts src/migrations/AddOrderStatus` | `prisma migrate dev --name add-order-status` |
+| Review | Open `src/migrations/...AddOrderStatus.ts` | Open `prisma/migrations/.../migration.sql` |
+| Run (dev) | `migration:run -d src/data-source.ts` | `prisma migrate dev` |
+| Run (prod) | `migration:run` via compiled JS | `prisma migrate deploy` |
+| Rollback | `migration:revert -d src/data-source.ts` | Revert deploy, restore backup |
 
 ## Related
 
-- `/build-fix` -- Fix build errors that may arise after migration changes
+- `/verify` -- Confirm build passes after schema change
+- `/build-fix` -- Fix TypeScript errors from entity changes

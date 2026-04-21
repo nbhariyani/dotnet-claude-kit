@@ -1,224 +1,256 @@
 ---
 name: authentication
 description: >
-  Authentication and authorization for ASP.NET Core. Covers JWT bearer tokens,
-  OpenID Connect, ASP.NET Identity, authorization policies, role and claim-based
-  authorization, and API key authentication.
-  Load this skill when implementing login, protecting endpoints, designing
-  authorization rules, or when the user mentions "auth", "JWT", "bearer token",
-  "OIDC", "OpenID Connect", "Identity", "claims", "roles", "authorize",
-  "RequireAuthorization", "API key", or "cookie auth".
+  Authentication and authorization for NestJS using Passport.js, JWT bearer tokens,
+  JwtAuthGuard, RolesGuard, and the @Public() bypass decorator.
+  Covers JWT strategy, refresh token rotation, and policy-based access.
+  Load this skill when implementing login, JWT auth, guards, role-based access,
+  or when the user mentions "authentication", "authorization", "JWT", "passport",
+  "JwtAuthGuard", "RolesGuard", "login", "refresh token", "bearer token",
+  "guard", "@UseGuards", "RBAC", or "access control".
 ---
 
-# Authentication & Authorization
+# Authentication (NestJS)
 
 ## Core Principles
 
-1. **Use ASP.NET Identity for user management** — Don't build your own user store. Identity handles password hashing, lockout, two-factor, and email confirmation.
-2. **JWT for APIs, cookies for web apps** — APIs use Bearer token authentication; Blazor/MVC apps use cookie authentication.
-3. **Policy-based authorization over roles** — Policies are testable, composable, and more expressive than `[Authorize(Roles = "Admin")]`.
-4. **Never store secrets in code** — Use user secrets in development, Azure Key Vault / environment variables in production.
+1. **Passport strategies are the standard** — `@nestjs/passport` wraps Passport.js
+   cleanly. Use `JwtStrategy` for stateless APIs, `LocalStrategy` for login endpoints.
+2. **Guards enforce auth, not middleware** — Use `JwtAuthGuard` on routes (or globally
+   via `APP_GUARD`). Middleware runs before guards and cannot stop requests cleanly.
+3. **Global guard + @Public() is cleaner than per-route @UseGuards** — Register
+   `JwtAuthGuard` globally via `APP_GUARD`; every new route is protected by default.
+4. **Never store passwords in plain text** — Use `bcrypt` with cost factor 12+.
+5. **Refresh tokens in HttpOnly cookies** — Access tokens in Authorization headers;
+   refresh tokens in HttpOnly, Secure, SameSite=Strict cookies.
 
 ## Patterns
 
-### JWT Bearer Authentication
+### JWT Strategy and Guard
 
-```csharp
-// Program.cs
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidAudience = builder.Configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
-            ClockSkew = TimeSpan.Zero
-        };
+```typescript
+// auth/strategies/jwt.strategy.ts
+import { Injectable } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import { ConfigService } from '@nestjs/config';
+
+export interface JwtPayload {
+  sub: string;
+  email: string;
+  roles: string[];
+}
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(config: ConfigService) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ignoreExpiration: false,
+      secretOrKey: config.getOrThrow<string>('JWT_SECRET'),
     });
+  }
 
-builder.Services.AddAuthorization();
-```
-
-### Token Generation
-
-```csharp
-public class TokenService(IConfiguration config, TimeProvider clock)
-{
-    public string GenerateToken(User user, IEnumerable<string> roles)
-    {
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.NameIdentifier, user.Id),
-            new(ClaimTypes.Email, user.Email!),
-            new(ClaimTypes.Name, user.UserName!)
-        };
-
-        claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
-
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Key"]!));
-        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
-        var token = new JwtSecurityToken(
-            issuer: config["Jwt:Issuer"],
-            audience: config["Jwt:Audience"],
-            claims: claims,
-            expires: clock.GetUtcNow().AddHours(1).DateTime,
-            signingCredentials: credentials);
-
-        return new JwtSecurityTokenHandler().WriteToken(token);
-    }
-}
-```
-
-### Policy-Based Authorization
-
-```csharp
-// Define policies
-builder.Services.AddAuthorizationBuilder()
-    .AddPolicy("AdminOnly", policy => policy.RequireRole("Admin"))
-    .AddPolicy("CanManageOrders", policy => policy
-        .RequireAuthenticatedUser()
-        .RequireClaim("permission", "orders:write"))
-    .AddPolicy("MinimumAge", policy => policy
-        .AddRequirements(new MinimumAgeRequirement(18)));
-
-// Custom requirement + handler
-public class MinimumAgeRequirement(int minimumAge) : IAuthorizationRequirement
-{
-    public int MinimumAge => minimumAge;
+  validate(payload: JwtPayload) {
+    return { userId: payload.sub, email: payload.email, roles: payload.roles };
+  }
 }
 
-public class MinimumAgeHandler(TimeProvider clock) : AuthorizationHandler<MinimumAgeRequirement>
-{
-    protected override Task HandleRequirementAsync(
-        AuthorizationHandlerContext context,
-        MinimumAgeRequirement requirement)
-    {
-        var dateOfBirthClaim = context.User.FindFirst("date_of_birth");
-        if (dateOfBirthClaim is not null &&
-            DateOnly.TryParse(dateOfBirthClaim.Value, out var dob) &&
-            dob.AddYears(requirement.MinimumAge) <= DateOnly.FromDateTime(clock.GetUtcNow().DateTime))
-        {
-            context.Succeed(requirement);
-        }
-        return Task.CompletedTask;
-    }
+// auth/guards/jwt-auth.guard.ts
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {
+  constructor(private reflector: Reflector) { super(); }
+
+  canActivate(context: ExecutionContext) {
+    const isPublic = this.reflector.getAllAndOverride<boolean>('isPublic', [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) return true;
+    return super.canActivate(context);
+  }
 }
+
+// auth/decorators/public.decorator.ts
+export const Public = () => SetMetadata('isPublic', true);
 ```
 
-### Protecting Endpoints
+### Roles Guard
 
-```csharp
-// Protect an entire group
-app.MapGroup("/api/admin")
-    .WithTags("Admin")
-    .RequireAuthorization("AdminOnly")
-    .MapAdminEndpoints();
+```typescript
+// auth/guards/roles.guard.ts
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
 
-// Protect individual endpoints
-group.MapPost("/", CreateOrder)
-    .RequireAuthorization("CanManageOrders");
+  canActivate(context: ExecutionContext): boolean {
+    const roles = this.reflector.getAllAndOverride<string[]>('roles', [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (!roles?.length) return true;
+    const { user } = context.switchToHttp().getRequest();
+    return roles.some((r) => user?.roles?.includes(r));
+  }
+}
 
-// Allow anonymous on a protected group
-group.MapGet("/public-info", GetPublicInfo)
-    .AllowAnonymous();
+// auth/decorators/roles.decorator.ts
+export const Roles = (...roles: string[]) => SetMetadata('roles', roles);
 ```
 
-### OpenID Connect (External Identity Provider)
+### AuthModule Registration
 
-```csharp
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+```typescript
+// auth/auth.module.ts
+@Module({
+  imports: [
+    PassportModule.register({ defaultStrategy: 'jwt' }),
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.getOrThrow('JWT_SECRET'),
+        signOptions: { expiresIn: config.get('JWT_EXPIRES_IN', '15m') },
+      }),
+    }),
+  ],
+  providers: [AuthService, JwtStrategy, LocalStrategy],
+  exports: [JwtModule, PassportModule],
 })
-.AddCookie()
-.AddOpenIdConnect(options =>
-{
-    options.Authority = builder.Configuration["Oidc:Authority"];
-    options.ClientId = builder.Configuration["Oidc:ClientId"];
-    options.ClientSecret = builder.Configuration["Oidc:ClientSecret"];
-    options.ResponseType = "code";
-    options.SaveTokens = true;
-    options.Scope.Add("openid");
-    options.Scope.Add("profile");
-    options.Scope.Add("email");
-});
+export class AuthModule {}
 ```
 
-### Accessing Current User
+### Global Guard Registration
 
-```csharp
-// In minimal API handlers — inject ClaimsPrincipal or HttpContext
-group.MapGet("/me", (ClaimsPrincipal user) =>
-{
-    var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
-    var email = user.FindFirstValue(ClaimTypes.Email);
-    return TypedResults.Ok(new { userId, email });
-}).RequireAuthorization();
+```typescript
+// app.module.ts providers array
+import { APP_GUARD } from '@nestjs/core';
+
+providers: [
+  { provide: APP_GUARD, useClass: JwtAuthGuard },
+  { provide: APP_GUARD, useClass: RolesGuard },
+],
 ```
 
-## Anti-patterns
+### Login with LocalStrategy
 
-### Don't Use Role Strings Everywhere
+```typescript
+// auth/strategies/local.strategy.ts
+@Injectable()
+export class LocalStrategy extends PassportStrategy(Strategy, 'local') {
+  constructor(private authService: AuthService) {
+    super({ usernameField: 'email' });
+  }
 
-```csharp
-// BAD — magic strings, hard to refactor, not testable
-[Authorize(Roles = "Admin,SuperAdmin,Manager")]
-public class AdminController { }
+  async validate(email: string, password: string) {
+    const user = await this.authService.validateUser(email, password);
+    if (!user) throw new UnauthorizedException('Invalid credentials');
+    return user;
+  }
+}
 
-// GOOD — policy-based
-builder.Services.AddAuthorizationBuilder()
-    .AddPolicy("AdminAccess", p => p.RequireRole("Admin", "SuperAdmin", "Manager"));
+// auth/auth.service.ts
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly jwtService: JwtService,
+  ) {}
 
-group.MapGet("/", Handler).RequireAuthorization("AdminAccess");
-```
+  async validateUser(email: string, password: string) {
+    const user = await this.usersService.findByEmail(email);
+    if (!user) return null;
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    return valid ? user : null;
+  }
 
-### Don't Store Secrets in appsettings.json
+  login(user: User): { accessToken: string } {
+    const payload: JwtPayload = { sub: user.id, email: user.email, roles: user.roles };
+    return { accessToken: this.jwtService.sign(payload) };
+  }
+}
 
-```json
-// BAD — committed to source control
-{
-  "Jwt": {
-    "Key": "super-secret-key-12345"
+// auth/auth.controller.ts
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Public()
+  @UseGuards(AuthGuard('local'))
+  @Post('login')
+  login(@Request() req: { user: User }) {
+    return this.authService.login(req.user);
   }
 }
 ```
 
-```bash
-# GOOD — use user secrets in development
-dotnet user-secrets set "Jwt:Key" "super-secret-key-12345"
+### CurrentUser Decorator
+
+```typescript
+// auth/decorators/current-user.decorator.ts
+export const CurrentUser = createParamDecorator(
+  (_: unknown, ctx: ExecutionContext) => ctx.switchToHttp().getRequest().user,
+);
+
+// Usage
+@Get('profile')
+getProfile(@CurrentUser() user: JwtPayload) {
+  return user;
+}
 ```
 
-### Don't Skip Token Validation
+## Anti-patterns
 
-```csharp
-// BAD — disabling validation
-options.TokenValidationParameters = new TokenValidationParameters
-{
-    ValidateIssuer = false,      // DON'T
-    ValidateAudience = false,    // DON'T
-    ValidateLifetime = false,    // DEFINITELY DON'T
-};
+### Don't Do Auth Logic in Controllers
 
-// GOOD — validate everything (see JWT Bearer Authentication pattern above for full setup)
+```typescript
+// BAD — authorization leaks into controller
+@Get(':id')
+async findOrder(@Param('id') id: string, @Request() req) {
+  if (!req.user.roles.includes('admin')) throw new ForbiddenException();
+  return this.service.findById(id);
+}
+
+// GOOD — guard handles it declaratively
+@Roles('admin')
+@Get(':id')
+findOrder(@Param('id', ParseUUIDPipe) id: string) {
+  return this.service.findById(id);
+}
+```
+
+### Don't Hardcode JWT Secret
+
+```typescript
+// BAD
+JwtModule.register({ secret: 'hardcoded-secret' })
+
+// GOOD
+JwtModule.registerAsync({
+  useFactory: (config: ConfigService) => ({ secret: config.getOrThrow('JWT_SECRET') }),
+  inject: [ConfigService],
+})
+```
+
+### Don't Use Long-Lived Access Tokens
+
+```typescript
+// BAD — 7-day token cannot be revoked without a blocklist
+signOptions: { expiresIn: '7d' }
+
+// GOOD — short access token + refresh token rotation
+signOptions: { expiresIn: '15m' }
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| REST API | JWT Bearer authentication |
-| Blazor Server / MVC | Cookie authentication |
-| External identity provider | OpenID Connect |
-| User registration / login | ASP.NET Identity |
-| Permission checking | Policy-based authorization |
-| Multi-tenant API | Claims-based with tenant claim |
-| API-to-API communication | Client credentials (OAuth 2.0) |
-| Simple API keys | Custom `AuthenticationHandler<T>` |
+|---|---|
+| Stateless REST API auth | JWT via `passport-jwt` |
+| Login endpoint | `LocalStrategy` + `AuthGuard('local')` |
+| Protect all routes by default | `APP_GUARD` + `JwtAuthGuard` |
+| Public routes | `@Public()` decorator |
+| Role-based access | `RolesGuard` + `@Roles()` decorator |
+| Fine-grained permissions | Custom `CanActivate` with `Reflector` |
+| API key auth | Custom guard reading `x-api-key` header |
+| Social login | `passport-google-oauth20`, `passport-github2` |

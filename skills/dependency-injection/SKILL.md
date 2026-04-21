@@ -1,179 +1,228 @@
 ---
 name: dependency-injection
 description: >
-  Dependency injection patterns for .NET 10. Covers service lifetimes, keyed
-  services, the decorator pattern, factory pattern, and common DI pitfalls.
-  Load this skill when registering services, resolving lifetime issues, designing
-  service composition, or when the user mentions "DI", "dependency injection",
-  "service registration", "AddScoped", "AddTransient", "AddSingleton", "keyed
-  services", "decorator", "Scrutor", "IServiceCollection", or "captive dependency".
+  NestJS dependency injection patterns covering providers, module scope,
+  custom providers (useFactory, useValue, useClass), injection tokens,
+  optional dependencies, and circular injection prevention.
+  Load this skill when wiring up services, configuring providers, using
+  custom tokens, or when the user mentions "injectable", "provider",
+  "module", "useFactory", "useValue", "useClass", "inject token",
+  "circular dependency", "scope", "transient", "REQUEST scope", or "DI".
 ---
 
-# Dependency Injection
+# Dependency Injection (NestJS)
 
 ## Core Principles
 
-1. **Constructor injection is the default** — Inject dependencies through the constructor (primary constructors make this clean). No service locator, no property injection.
-2. **Match lifetimes carefully** — A singleton must never depend on a scoped or transient service. This is the most common DI bug.
-3. **Register interfaces, resolve interfaces** — Register `services.AddScoped<IOrderService, OrderService>()`, not the concrete type.
-4. **Keyed services for strategy pattern** — .NET 8+ keyed services replace manual factory patterns for selecting between implementations.
+1. **@Injectable() marks a class as a provider** — Any class decorated with
+   `@Injectable()` can be injected. Registration in `module.providers[]` makes
+   it available within that module's scope.
+2. **Module exports control visibility** — A provider is only available to other
+   modules when explicitly listed in `exports[]`. Never import a service class
+   directly across module boundaries — import the module instead.
+3. **Default scope is Singleton** — One instance per application lifetime. Use
+   `REQUEST` scope sparingly (new instance per HTTP request, expensive). Use
+   `TRANSIENT` when every injection needs a fresh instance.
+4. **useFactory for async initialization** — When a provider depends on config,
+   a database connection, or async setup, use `useFactory` with `async`.
+5. **Symbol injection tokens prevent string key conflicts** — Use `Symbol` or
+   typed `InjectionToken` constants instead of raw strings like `'DATABASE'`.
 
 ## Patterns
 
-### Keyed Services (.NET 8+)
+### Standard Provider Registration
 
-Use keyed services to register and resolve multiple implementations of the same interface.
-
-```csharp
-// Registration
-builder.Services.AddKeyedScoped<INotificationService, EmailNotificationService>("email");
-builder.Services.AddKeyedScoped<INotificationService, SmsNotificationService>("sms");
-builder.Services.AddKeyedScoped<INotificationService, PushNotificationService>("push");
-
-// Resolution via attribute
-public class OrderHandler([FromKeyedServices("email")] INotificationService notifier)
-{
-    public async Task Handle(CreateOrder.Command command, CancellationToken ct)
-    {
-        // ... create order
-        await notifier.SendAsync(notification, ct);
-    }
-}
-
-// Resolution via IServiceProvider
-public class NotificationRouter(IServiceProvider provider)
-{
-    public INotificationService GetService(string channel)
-    {
-        return provider.GetRequiredKeyedService<INotificationService>(channel);
-    }
-}
+```typescript
+// orders/orders.module.ts
+@Module({
+  imports: [TypeOrmModule.forFeature([Order])],
+  providers: [OrdersService],
+  controllers: [OrdersController],
+  exports: [OrdersService], // only export what other modules need
+})
+export class OrdersModule {}
 ```
 
-### Decorator Pattern
+### Custom Provider with useFactory (Async)
 
-```csharp
-// Base service
-public interface IOrderService
-{
-    Task<Result<Order>> CreateAsync(CreateOrderRequest request, CancellationToken ct);
-}
+```typescript
+// database/database.providers.ts
+export const DATABASE_PROVIDER = Symbol('DATABASE_PROVIDER');
 
-public class OrderService(AppDbContext db, TimeProvider clock) : IOrderService
-{
-    public async Task<Result<Order>> CreateAsync(CreateOrderRequest request, CancellationToken ct)
-    {
-        var order = Order.Create(request, clock.GetUtcNow());
-        db.Orders.Add(order);
-        await db.SaveChangesAsync(ct);
-        return Result.Success(order);
-    }
-}
+export const databaseProviders = [
+  {
+    provide: DATABASE_PROVIDER,
+    useFactory: async (config: ConfigService): Promise<DataSource> => {
+      const dataSource = new DataSource({
+        type: 'postgres',
+        url: config.getOrThrow('DATABASE_URL'),
+        entities: [__dirname + '/../**/*.entity{.ts,.js}'],
+        migrations: [__dirname + '/../migrations/*{.ts,.js}'],
+        synchronize: false,
+      });
+      return dataSource.initialize();
+    },
+    inject: [ConfigService],
+  },
+];
 
-// Decorator — adds logging
-public class LoggingOrderService(IOrderService inner, ILogger<LoggingOrderService> logger) : IOrderService
-{
-    public async Task<Result<Order>> CreateAsync(CreateOrderRequest request, CancellationToken ct)
-    {
-        logger.LogInformation("Creating order for customer {CustomerId}", request.CustomerId);
-        var result = await inner.CreateAsync(request, ct);
-        if (result.IsSuccess)
-            logger.LogInformation("Order {OrderId} created", result.Value.Id);
-        return result;
-    }
-}
-
-// Registration with Scrutor
-builder.Services.AddScoped<IOrderService, OrderService>();
-builder.Services.Decorate<IOrderService, LoggingOrderService>();
+// Usage in any service
+constructor(@Inject(DATABASE_PROVIDER) private dataSource: DataSource) {}
 ```
 
-### Registration by Convention (Scrutor)
+### useValue for Constants and Test Doubles
 
-```csharp
-// Auto-register all services matching a convention
-builder.Services.Scan(scan => scan
-    .FromAssemblyOf<Program>()
-    .AddClasses(classes => classes.AssignableTo<ITransientService>())
-    .AsImplementedInterfaces()
-    .WithTransientLifetime()
-    .AddClasses(classes => classes.AssignableTo<IScopedService>())
-    .AsImplementedInterfaces()
-    .WithScopedLifetime());
-```
+```typescript
+// Config constant
+export const APP_CONFIG = Symbol('APP_CONFIG');
+export interface AppConfig { maxRetries: number; timeoutMs: number; }
 
-### Factory Pattern
+{ provide: APP_CONFIG, useValue: { maxRetries: 3, timeoutMs: 5000 } satisfies AppConfig }
 
-When you need runtime logic to select an implementation.
-
-```csharp
-builder.Services.AddScoped<IPaymentProcessor>(sp =>
-{
-    var config = sp.GetRequiredService<IOptions<PaymentOptions>>().Value;
-    return config.Provider switch
+// In tests — replace real service with mock
+Test.createTestingModule({
+  providers: [
+    OrdersService,
     {
-        "stripe" => ActivatorUtilities.CreateInstance<StripeProcessor>(sp),
-        "paypal" => ActivatorUtilities.CreateInstance<PayPalProcessor>(sp),
-        _ => throw new InvalidOperationException($"Unknown payment provider: {config.Provider}")
-    };
+      provide: getRepositoryToken(Order),
+      useValue: { save: jest.fn(), findOne: jest.fn() },
+    },
+  ],
 });
 ```
 
-### Options Registration
+### useClass for Strategy/Implementation Swapping
 
-```csharp
-// Bind configuration section to a strongly-typed options class
-builder.Services.AddOptions<JwtOptions>()
-    .BindConfiguration("Jwt")
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
+```typescript
+export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
 
-// Inject as IOptions<T>
-public class TokenService(IOptions<JwtOptions> options)
-{
-    private readonly JwtOptions _jwt = options.Value;
+@Module({
+  providers: [
+    {
+      provide: PAYMENT_GATEWAY,
+      useClass: process.env.NODE_ENV === 'test'
+        ? MockPaymentGateway
+        : StripePaymentGateway,
+    },
+  ],
+  exports: [PAYMENT_GATEWAY],
+})
+export class PaymentModule {}
+```
+
+### Provider Scope
+
+```typescript
+import { Injectable, Scope } from '@nestjs/common';
+
+@Injectable()                                        // default: singleton
+export class OrdersService {}
+
+@Injectable({ scope: Scope.REQUEST })                // new instance per request
+export class RequestContextService {
+  constructor(@Inject(REQUEST) private request: Request) {}
+  get userId(): string { return this.request['user']?.userId; }
+}
+
+@Injectable({ scope: Scope.TRANSIENT })              // new instance per injection
+export class LoggerService {}
+```
+
+### forwardRef for Unavoidable Circular Dependencies
+
+Restructure to break the cycle first. Use `forwardRef` only as a last resort.
+
+```typescript
+@Injectable()
+export class OrdersService {
+  constructor(
+    @Inject(forwardRef(() => PaymentsService))
+    private readonly paymentsService: PaymentsService,
+  ) {}
+}
+```
+
+### Optional Dependencies
+
+```typescript
+@Injectable()
+export class NotificationService {
+  constructor(
+    @Optional() @Inject('PUSH_PROVIDER')
+    private readonly pushProvider?: PushProvider,
+  ) {}
+
+  send(message: string) {
+    this.pushProvider?.send(message);
+  }
 }
 ```
 
 ## Anti-patterns
 
-### Don't Capture Scoped Services in Singletons
+### Don't Import Services Directly Across Module Boundaries
 
-```csharp
-// BAD — DbContext is scoped, captured by singleton = memory leak + stale data
-builder.Services.AddSingleton<OrderCache>(); // depends on AppDbContext
+```typescript
+// BAD — bypasses module encapsulation
+import { PaymentsService } from '../payments/payments.service';
 
-// GOOD — use IServiceScopeFactory in singleton
-public class OrderCache(IServiceScopeFactory scopeFactory)
-{
-    public async Task<Order?> GetAsync(Guid id)
-    {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await db.Orders.FindAsync(id);
-    }
+@Module({
+  providers: [OrdersService, PaymentsService], // ← wrong module
+})
+
+// GOOD — import the module, use its exports
+@Module({
+  imports: [PaymentsModule],
+  providers: [OrdersService],
+})
+```
+
+### Don't Use Raw String Injection Tokens
+
+```typescript
+// BAD — typo-prone, no type safety
+{ provide: 'database', useFactory: ... }
+constructor(@Inject('database') private db: DataSource) {}
+
+// GOOD — Symbol constant
+export const DATABASE = Symbol('DATABASE');
+{ provide: DATABASE, useFactory: ... }
+constructor(@Inject(DATABASE) private db: DataSource) {}
+```
+
+### Don't Use REQUEST Scope Unnecessarily
+
+```typescript
+// BAD — REQUEST scope propagates up the entire dependency tree
+@Injectable({ scope: Scope.REQUEST })
+export class OrdersService {} // doesn't actually need request data
+
+// GOOD — only the leaf service that reads REQUEST gets the scope
+@Injectable({ scope: Scope.REQUEST })
+export class RequestContextService {
+  constructor(@Inject(REQUEST) private request: Request) {}
 }
 ```
 
-### Don't Register Everything as Singleton
+### Don't Use app.get() Outside Bootstrap
 
-```csharp
-// BAD — making a service singleton when it holds mutable state
-builder.Services.AddSingleton<OrderService>(); // has DbContext dependency
+```typescript
+// BAD — service locator pattern
+const service = app.get(OrdersService);
+service.doSomething(); // called from business logic
 
-// GOOD — match the lifetime to the service's needs
-builder.Services.AddScoped<OrderService>();
+// GOOD — inject via constructor
+constructor(private readonly ordersService: OrdersService) {}
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Stateless service | Scoped (default) or Transient |
-| Configuration / cache | Singleton |
-| DbContext | Scoped (registered by `AddDbContext`) |
-| Multiple implementations | Keyed services (strategy pattern) |
-| Cross-cutting behavior | Decorator pattern |
-| Convention-based registration | Scrutor |
-| Runtime implementation selection | Factory delegate |
-| Strongly-typed config | `AddOptions<T>().BindConfiguration()` |
+|---|---|
+| Standard service | `@Injectable()` + `providers[]` |
+| Async initialization (DB, config) | `useFactory` with `async` |
+| Environment-based implementation | `useClass` with conditional |
+| Test double / constant value | `useValue` |
+| Cross-module sharing | `exports[]` in source + `imports[]` in consumer |
+| Request-scoped data | `Scope.REQUEST` only on the service that reads `REQUEST` |
+| Circular deps (unavoidable) | `forwardRef()` — then refactor to remove it |

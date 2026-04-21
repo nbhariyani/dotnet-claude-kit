@@ -1,260 +1,186 @@
 # Common Anti-patterns
 
-> Patterns that Claude tends to generate incorrectly. Every developer using dotnet-claude-kit should be protected from these mistakes.
+> Patterns that Claude tends to generate incorrectly. Every developer using `nestjs-claude-kit` should be protected from these mistakes.
 
-## async void
+## Orphaned Promises
 
-**Problem:** `async void` methods swallow exceptions and cannot be awaited. They're only valid for event handlers.
+**Problem:** Kicking off async work without `await` or explicit handling hides failures and creates race conditions.
 
-```csharp
-// BAD — exception will crash the process or be silently swallowed
-public async void ProcessOrder(Order order)
-{
-    await _repository.SaveAsync(order);
+```ts
+// BAD
+this.ordersService.syncOrder(orderId);
+return { ok: true };
+
+// GOOD
+await this.ordersService.syncOrder(orderId);
+return { ok: true };
+```
+
+## Direct `process.env` in Application Code
+
+**Problem:** Reading environment variables directly spreads config logic across the codebase and makes testing harder.
+
+```ts
+// BAD
+if (process.env.NODE_ENV === 'production') {
+  // ...
 }
 
-// GOOD — always return Task
-public async Task ProcessOrderAsync(Order order)
-{
-    await _repository.SaveAsync(order);
+// GOOD
+if (this.configService.getOrThrow('NODE_ENV') === 'production') {
+  // ...
 }
 ```
 
-## Task.Result / Task.Wait()
+## Business Logic in Controllers
 
-**Problem:** Synchronously blocking on async code causes deadlocks in ASP.NET and UI contexts.
+**Problem:** Controllers should orchestrate HTTP concerns, not contain business rules, persistence, or heavy transformations.
 
-```csharp
-// BAD — deadlock risk
-var order = _orderService.GetOrderAsync(id).Result;
-_orderService.GetOrderAsync(id).Wait();
-var order = _orderService.GetOrderAsync(id).GetAwaiter().GetResult();
-
-// GOOD — await all the way
-var order = await _orderService.GetOrderAsync(id);
-```
-
-## HttpClient Without IHttpClientFactory
-
-**Problem:** Creating `HttpClient` directly causes socket exhaustion and DNS caching issues.
-
-```csharp
-// BAD — socket exhaustion
-public class PaymentService
-{
-    public async Task<bool> ChargeAsync(decimal amount)
-    {
-        using var client = new HttpClient(); // DON'T
-        var response = await client.PostAsync("https://payments.example.com/charge", ...);
-        return response.IsSuccessStatusCode;
-    }
+```ts
+// BAD
+@Post()
+async create(@Body() dto: CreateOrderDto) {
+  const total = dto.items.reduce((sum, item) => sum + item.price * item.qty, 0);
+  return this.orderRepository.save({ ...dto, total });
 }
 
-// GOOD — IHttpClientFactory via named or typed clients
-builder.Services.AddHttpClient<PaymentService>(client =>
-{
-    client.BaseAddress = new Uri("https://payments.example.com");
-    client.Timeout = TimeSpan.FromSeconds(30);
+// GOOD
+@Post()
+create(@Body() dto: CreateOrderDto) {
+  return this.ordersService.create(dto);
+}
+```
+
+## Missing DTO Validation
+
+**Problem:** Accepting unvalidated bodies lets bad data reach services and often turns 400-level problems into 500s.
+
+```ts
+// BAD
+create(@Body() body: any) {
+  return this.usersService.create(body);
+}
+
+// GOOD
+create(@Body() dto: CreateUserDto) {
+  return this.usersService.create(dto);
+}
+```
+
+## Returning ORM Entities Directly
+
+**Problem:** Exposing raw entities leaks internal fields, couples APIs to persistence, and makes contract changes painful.
+
+```ts
+// BAD
+return this.userRepository.findOneBy({ id });
+
+// GOOD
+const user = await this.userRepository.findOneByOrFail({ id });
+return UserResponseDto.from(user);
+```
+
+## Cross-Module Private Imports
+
+**Problem:** Importing another module's private files bypasses Nest module boundaries and creates fragile coupling.
+
+```ts
+// BAD
+import { OrdersService } from '../orders/orders.service';
+
+// GOOD
+// Import the OrdersModule and consume exported providers through module boundaries.
+```
+
+## `synchronize: true` Outside Local Development
+
+**Problem:** Automatic schema sync is convenient locally but dangerous in shared or production environments.
+
+```ts
+// BAD
+TypeOrmModule.forRoot({
+  synchronize: true,
 });
 
-public class PaymentService(HttpClient client)
-{
-    public async Task<bool> ChargeAsync(decimal amount)
-    {
-        var response = await client.PostAsync("/charge", ...);
-        return response.IsSuccessStatusCode;
-    }
+// GOOD
+TypeOrmModule.forRoot({
+  synchronize: false,
+  migrationsRun: false,
+});
+```
+
+## Unbounded List Endpoints
+
+**Problem:** Returning full tables without pagination can become an accidental denial-of-service path.
+
+```ts
+// BAD
+return this.ordersRepository.find();
+
+// GOOD
+return this.ordersService.list({ page, limit });
+```
+
+## Broad Catch Blocks
+
+**Problem:** Catching everything and flattening it into a generic response hides real bugs and breaks observability.
+
+```ts
+// BAD
+try {
+  return await this.paymentsService.charge(dto);
+} catch (error) {
+  return { ok: false };
+}
+
+// GOOD
+try {
+  return await this.paymentsService.charge(dto);
+} catch (error) {
+  if (error instanceof PaymentDeclinedError) {
+    throw new BadRequestException(error.message);
+  }
+  throw error;
 }
 ```
 
-## DateTime.Now / DateTime.UtcNow
+## Console Logging in App Code
 
-**Problem:** Direct use of `DateTime.Now` makes code untestable and can cause timezone bugs.
+**Problem:** `console.log` bypasses structured logging, correlation, and log-level control.
 
-```csharp
-// BAD — untestable, timezone-dependent
-public class OrderService
-{
-    public Order CreateOrder() => new() { CreatedAt = DateTime.Now };
-}
+```ts
+// BAD
+console.log('Processing order', orderId);
 
-// GOOD — inject TimeProvider
-public class OrderService(TimeProvider clock)
-{
-    public Order CreateOrder() => new() { CreatedAt = clock.GetUtcNow() };
-}
-
-// In tests, use FakeTimeProvider
-var clock = new FakeTimeProvider(new DateTimeOffset(2025, 6, 15, 0, 0, 0, TimeSpan.Zero));
+// GOOD
+this.logger.log(`Processing order ${orderId}`);
 ```
 
-## Throwing Exceptions for Flow Control
+## Using `any` Across Boundaries
 
-**Problem:** Exceptions are expensive (stack trace capture) and make control flow hard to follow. Use the Result pattern instead.
+**Problem:** `any` removes the compiler's ability to protect service and controller contracts.
 
-```csharp
-// BAD — exceptions for expected failures
-public Order GetOrder(Guid id)
-{
-    var order = _db.Orders.Find(id);
-    if (order is null)
-        throw new NotFoundException($"Order {id} not found"); // Expected case, not exceptional
-    return order;
+```ts
+// BAD
+async create(payload: any): Promise<any> {
+  return this.repo.save(payload);
 }
 
-// GOOD — Result pattern
-public Result<Order> GetOrder(Guid id)
-{
-    var order = _db.Orders.Find(id);
-    return order is not null
-        ? Result.Success(order)
-        : Result.Failure<Order>($"Order {id} not found");
+// GOOD
+async create(dto: CreateOrderDto): Promise<OrderResponseDto> {
+  const order = await this.repo.save(mapCreateOrder(dto));
+  return OrderResponseDto.from(order);
 }
 ```
 
-## Catching System.Exception
+## Decision Guide
 
-**Problem:** Catching the base `Exception` type hides bugs and swallows critical errors.
-
-```csharp
-// BAD — catches everything including OutOfMemoryException
-try
-{
-    await ProcessOrder(order);
-}
-catch (Exception ex)
-{
-    _logger.LogError(ex, "Something went wrong");
-    return Results.Problem("An error occurred");
-}
-
-// GOOD — catch specific exceptions
-try
-{
-    await ProcessOrder(order);
-}
-catch (PaymentDeclinedException ex)
-{
-    _logger.LogWarning(ex, "Payment declined for order {OrderId}", order.Id);
-    return Results.Problem("Payment was declined", statusCode: 402);
-}
-// Let unexpected exceptions propagate to the global handler
-```
-
-## Service Locator Pattern
-
-**Problem:** Resolving services from `IServiceProvider` directly hides dependencies and breaks compile-time checking.
-
-```csharp
-// BAD — service locator
-public class OrderService(IServiceProvider provider)
-{
-    public async Task Process()
-    {
-        var repo = provider.GetRequiredService<IOrderRepository>();
-        var logger = provider.GetRequiredService<ILogger<OrderService>>();
-    }
-}
-
-// GOOD — explicit constructor injection
-public class OrderService(IOrderRepository repository, ILogger<OrderService> logger)
-{
-    public async Task Process() { /* use repository and logger directly */ }
-}
-```
-
-## String Concatenation in Logging
-
-**Problem:** String interpolation in log messages prevents structured logging and wastes allocations when the log level is disabled.
-
-```csharp
-// BAD — allocates string even if Information level is disabled
-_logger.LogInformation($"Processing order {orderId} for customer {customerId}");
-
-// BAD — same problem with string.Format
-_logger.LogInformation(string.Format("Processing order {0}", orderId));
-
-// GOOD — structured logging with message template
-_logger.LogInformation("Processing order {OrderId} for customer {CustomerId}", orderId, customerId);
-```
-
-## Disposing IServiceScope Incorrectly
-
-**Problem:** Creating a scope but not disposing it leaks scoped services.
-
-```csharp
-// BAD — scope never disposed
-var scope = serviceProvider.CreateScope();
-var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-// GOOD — using statement
-using var scope = serviceProvider.CreateScope();
-var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-await db.Orders.ToListAsync();
-
-// GOOD — async using in async context
-await using var scope = serviceProvider.CreateAsyncScope();
-```
-
-## EF Core: Tracking Queries for Read-Only Operations
-
-**Problem:** Change tracking adds overhead for queries that only read data.
-
-```csharp
-// BAD — tracking enabled for a read-only list endpoint
-var orders = await db.Orders
-    .Include(o => o.Items)
-    .ToListAsync(ct);
-
-// GOOD — disable tracking for read operations
-var orders = await db.Orders
-    .AsNoTracking()
-    .Include(o => o.Items)
-    .ToListAsync(ct);
-
-// EVEN BETTER — project to DTO (no tracking needed)
-var orders = await db.Orders
-    .Select(o => new OrderSummary(o.Id, o.Total, o.Status))
-    .ToListAsync(ct);
-```
-
-## Registering Scoped Services as Singletons
-
-**Problem:** Capturing a scoped service (like `DbContext`) in a singleton causes it to live forever, leading to stale data and memory leaks.
-
-```csharp
-// BAD — DbContext captured in singleton
-builder.Services.AddSingleton<OrderCache>(); // OrderCache depends on AppDbContext
-
-// GOOD — match lifetimes, or use IServiceScopeFactory
-builder.Services.AddScoped<OrderCache>();
-
-// Or if singleton is required:
-public class OrderCache(IServiceScopeFactory scopeFactory)
-{
-    public async Task<Order?> GetAsync(Guid id)
-    {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await db.Orders.FindAsync(id);
-    }
-}
-```
-
-## Not Passing CancellationToken
-
-**Problem:** Without `CancellationToken`, requests continue processing after the client disconnects, wasting server resources.
-
-```csharp
-// BAD — no cancellation support
-public async Task<List<Order>> GetOrdersAsync()
-{
-    return await db.Orders.ToListAsync();
-}
-
-// GOOD — propagate CancellationToken
-public async Task<List<Order>> GetOrdersAsync(CancellationToken ct)
-{
-    return await db.Orders.ToListAsync(ct);
-}
-```
+| Scenario | Preferred Pattern |
+|---|---|
+| Request body handling | DTO + validation decorators |
+| Shared configuration | `ConfigService` |
+| API response shape | Response DTOs, not entities |
+| Cross-module collaboration | Module exports/contracts |
+| Database changes | Migrations, not sync |
+| Logging | Framework logger or structured logger |
+| Async work in request flow | Await it or handle it explicitly |

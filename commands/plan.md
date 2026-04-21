@@ -1,8 +1,8 @@
 ---
 description: >
-  Enter plan mode for .NET projects with architecture awareness. Analyzes tasks
-  through the lens of supported architectures (VSA, Clean Architecture, DDD,
-  Modular Monolith) and produces structured implementation plans before any code
+  Enter plan mode for NestJS projects with architecture awareness. Analyzes tasks
+  through the lens of supported architectures (Feature Modules, Clean Architecture,
+  DDD, Modular Monolith) and produces structured implementation plans before any code
   is written. Use when: "plan", "let's plan", "think through", "design this",
   "how should I implement", or any non-trivial task requiring 3+ steps.
 ---
@@ -27,7 +27,7 @@ stop and re-plan rather than pushing through a broken approach.
 
 - Non-trivial tasks requiring 3 or more implementation steps
 - Tasks involving architectural decisions (new modules, cross-cutting concerns, new bounded contexts)
-- Features that touch multiple layers (API, application, domain, infrastructure)
+- Features that touch multiple layers (controller, service, repository, infrastructure)
 - Refactoring that could affect multiple consumers
 - Any time the user says "plan", "think through", "design this", or "how should I approach"
 
@@ -43,14 +43,14 @@ Do not assume requirements that were not stated.
 ### Step 2: Detect Architecture
 
 Use the `architecture-advisor` skill to determine the project's architecture:
-- Check for existing architecture markers (folder structure, project references, patterns)
+- Check for existing architecture markers (folder structure, module patterns)
 - If no architecture is established, run the architecture questionnaire
-- Load the appropriate architecture-specific skill (vertical-slice, clean-architecture, ddd)
+- Load the appropriate architecture-specific skill (feature-modules, clean-architecture, ddd)
 
 ### Step 3: Map Affected Areas
 
 Identify every layer, module, and boundary the task touches:
-- Which projects/folders will have new or modified files?
+- Which folders will have new or modified files?
 - Are there cross-cutting concerns (auth, caching, validation, logging)?
 - What existing code will be impacted? Use `find_references` and `find_callers` MCP tools for blast radius.
 - Are there database migrations needed?
@@ -67,7 +67,7 @@ Output a numbered plan with this structure:
 **Estimated steps:** [Count]
 
 ### Steps
-1. [Step] -- [Which file/layer] -- [Why this order]
+1. [Step] -- [Which file/module] -- [Why this order]
 2. ...
 
 ### Open Questions
@@ -91,21 +91,21 @@ Claude: Let me analyze your project structure first...
 
 ## Plan: Product Catalog Feature
 
-**Architecture:** Vertical Slice Architecture
-**Affected layers:** Features/, Infrastructure/Persistence/, Tests/
+**Architecture:** Feature Modules
+**Affected layers:** src/products/, src/app.module.ts, migrations/
 **Estimated steps:** 6
 
 ### Steps
-1. Create Product entity + EF config -- Domain layer -- Foundation for everything else
-2. Add migration -- Infrastructure -- Schema must exist before features
-3. Scaffold GetProducts feature (with filtering) -- Features/Products/ -- Read path first
-4. Scaffold CreateProduct feature -- Features/Products/ -- Write path
-5. Add integration tests -- Tests/Features/Products/ -- Verify both features
-6. Wire up OpenAPI metadata -- Features/Products/ -- Documentation
+1. Create Product entity + TypeORM config -- src/products/entities/ -- Foundation for everything else
+2. Generate migration -- migrations/ -- Schema must exist before features
+3. Scaffold ProductsModule with controller + service -- src/products/ -- Full feature slice
+4. Add CreateProductDto + filtering query DTO -- src/products/dto/ -- Input contracts first
+5. Add E2E tests -- src/products/products.e2e-spec.ts -- Verify both read and write paths
+6. Wire up OpenAPI metadata -- src/products/dto/ -- Documentation
 
 ### Open Questions
 - Should search be full-text (PostgreSQL tsvector) or simple LIKE?
-- Do products need categories/tags for filtering?
+- Do products need categories for filtering?
 
 Does this plan look right, or should I adjust anything?
 ```

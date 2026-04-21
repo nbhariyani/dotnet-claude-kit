@@ -1,284 +1,217 @@
 ---
 name: migration-workflow
 description: >
-  Safe migration workflows for EF Core database migrations, .NET version upgrades,
-  and NuGet dependency updates. Includes rollback strategies and verification steps.
-  Load when: "migration", "add migration", "ef migration", "update database",
-  "upgrade nuget", "update packages", "dependency update", "version upgrade".
+  Database migration workflows for NestJS with TypeORM and Prisma. Load this skill
+  when running migrations, generating schema changes, configuring TypeORM CLI,
+  Prisma migrate, zero-downtime migrations, or expand-contract pattern.
 ---
-
-# Migration Workflow
 
 ## Core Principles
 
-1. **Verify before applying** — Always review generated migration SQL before applying to any database. `dotnet ef migrations script` shows the exact SQL. Never apply blindly.
-2. **Rollback plan always** — Every migration has a rollback. For EF Core: `dotnet ef database update <PreviousMigration>`. For packages: git revert. For .NET version: branch-based rollback. Document the rollback before applying.
-3. **Test after migration** — Run the full test suite after every migration step. Migrations that break tests are not complete. Integration tests with Testcontainers catch real database issues.
-4. **One change per migration** — Each EF Core migration should represent a single logical change (add table, rename column, add index). Multiple unrelated changes in one migration make rollback impossible.
-5. **Incremental updates** — Update one package at a time, build, test. Update one target framework at a time, build, test. Never batch unrelated changes — when something breaks, you need to know which change caused it.
+1. **Never use `synchronize: true` in production.** It auto-applies schema changes
+   without review, can truncate data on column type changes, and gives no rollback
+   path. Use it only in local development if at all.
+
+2. **Migration generation is a starting point, not the final output.** Generated
+   migrations must be reviewed before committing. Auto-generation misses data
+   backfills, index strategy, and partial index conditions.
+
+3. **Run migrations before deploying the new app version.** The old app must be
+   able to run against the new schema (expand phase). If migrations run after
+   deploy, there is a window where the new code hits the old schema.
+
+4. **Use expand-contract for zero-downtime changes.** Dropping a column or renaming
+   one is a breaking change. Use expand (add new) → migrate data → contract (remove
+   old) across multiple deploys.
+
+5. **Commit migration files to source control.** Migrations are part of the
+   application history. They must be versioned, reviewed, and never mutated after
+   being applied to any non-local environment.
 
 ## Patterns
 
-### EF Core Migration Workflow
+### TypeORM: data-source.ts
 
-Step-by-step workflow for creating and applying database migrations safely.
+```typescript
+// src/data-source.ts
+import { DataSource } from 'typeorm';
+import * as dotenv from 'dotenv';
+dotenv.config();
 
-**Step 1: Check Current State**
-```bash
-# List all migrations and their status
-dotnet ef migrations list --project src/Infrastructure --startup-project src/Api
-
-# Verify the database is at the expected migration
-dotnet ef database update --project src/Infrastructure --startup-project src/Api -- --dry-run
+export const AppDataSource = new DataSource({
+  type: 'postgres',
+  url: process.env['DATABASE_URL'],
+  entities: [__dirname + '/\*\*/\*.entity{.ts,.js}'],
+  migrations: [__dirname + '/migrations/\*{.ts,.js}'],
+  synchronize: false,
+});
 ```
 
-**Step 2: Create Migration**
-Use descriptive names that explain the change, not the entity:
-```bash
-# GOOD — Describes the change
-dotnet ef migrations add AddOrderShippingAddress --project src/Infrastructure --startup-project src/Api
-dotnet ef migrations add RenameCustomerEmailToContactEmail --project src/Infrastructure --startup-project src/Api
-dotnet ef migrations add AddIndexOnOrderCreatedAt --project src/Infrastructure --startup-project src/Api
+### TypeORM: package.json Scripts
 
-# BAD — Describes the entity, not the change
-dotnet ef migrations add Order
-dotnet ef migrations add UpdateCustomer
-```
-
-**Step 3: Review Generated SQL**
-```bash
-# Generate the SQL script for review
-dotnet ef migrations script --idempotent --project src/Infrastructure --startup-project src/Api
-
-# Or generate from a specific migration
-dotnet ef migrations script PreviousMigration AddOrderShippingAddress --project src/Infrastructure --startup-project src/Api
-```
-
-Check for:
-- ⚠️ Data loss: `DROP COLUMN`, `DROP TABLE`, column type changes that lose precision
-- ⚠️ Long locks: `ALTER TABLE` on large tables without concurrent index creation
-- ⚠️ Default values: New non-nullable columns need defaults for existing rows
-
-**Step 4: Handle Data Loss Warnings**
-If EF Core warns about potential data loss:
-
-```csharp
-// In the migration file — explicitly handle data transformation
-protected override void Up(MigrationBuilder migrationBuilder)
-{
-    // Step 1: Add new column as nullable
-    migrationBuilder.AddColumn<string>("ContactEmail", "Customers", nullable: true);
-
-    // Step 2: Copy data from old column
-    migrationBuilder.Sql("UPDATE \"Customers\" SET \"ContactEmail\" = \"Email\"");
-
-    // Step 3: Make non-nullable after data is copied
-    migrationBuilder.AlterColumn<string>("ContactEmail", "Customers", nullable: false);
-
-    // Step 4: Drop old column
-    migrationBuilder.DropColumn("Email", "Customers");
-}
-```
-
-**Step 5: Apply and Verify**
-```bash
-# Apply to development database
-dotnet ef database update --project src/Infrastructure --startup-project src/Api
-
-# Run tests to verify
-dotnet test
-```
-
-**Step 6: Rollback (if needed)**
-```bash
-# Rollback to previous migration
-dotnet ef database update PreviousMigrationName --project src/Infrastructure --startup-project src/Api
-
-# Remove the failed migration from code
-dotnet ef migrations remove --project src/Infrastructure --startup-project src/Api
-```
-
-### NuGet Dependency Update Workflow
-
-Safe process for updating NuGet packages without breaking the build.
-
-**Step 1: Audit Current State**
-```bash
-# List all outdated packages
-dotnet list package --outdated
-
-# Check for vulnerable packages
-dotnet list package --vulnerable
-```
-
-**Step 2: Categorize Updates**
-- **Patch updates** (1.0.0 → 1.0.1): Safe, bug fixes only. Update all patches at once.
-- **Minor updates** (1.0.0 → 1.1.0): Usually safe, new features. Update one at a time.
-- **Major updates** (1.0.0 → 2.0.0): Breaking changes expected. Update one at a time, read release notes.
-
-**Step 3: Update Incrementally**
-```bash
-# Patch updates — batch is safe
-dotnet outdated --upgrade Patch
-
-# Minor updates — one at a time
-dotnet add src/Api/Api.csproj package Serilog.AspNetCore --version 9.1.0
-dotnet build
-dotnet test
-
-# Major updates — one at a time with careful review
-dotnet add src/Api/Api.csproj package WolverineFx
-dotnet build  # Fix compilation errors
-dotnet test   # Fix behavioral changes
-```
-
-**Step 4: Reference Package Recommendations**
-Check `knowledge/package-recommendations.md` before adding new packages:
-- Is there a built-in .NET alternative? (e.g., HybridCache vs third-party cache)
-- Is the package actively maintained?
-- Does it align with kit recommendations?
-
-**Step 5: Verify**
-```bash
-dotnet build   # Clean compilation
-dotnet test    # All tests pass
-```
-
-### .NET Version Migration Workflow
-
-Structured upgrade from older .NET versions to .NET 10.
-
-**Step 1: Assess Current State**
-```
-→ get_project_graph
-  List all projects and their target frameworks.
-  Flag: mixed TFMs, test projects on different versions.
-```
-
-**Step 2: Pre-Migration Checklist**
-- [ ] All tests pass on current version
-- [ ] No pending EF Core migrations
-- [ ] Dependencies checked for .NET 10 compatibility
-- [ ] Branch created for migration work
-
-**Step 3: Update global.json**
 ```json
 {
-  "sdk": {
-    "version": "10.0.100",
-    "rollForward": "latestMinor"
+  "scripts": {
+    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/data-source.ts",
+    "migration:run": "typeorm-ts-node-commonjs migration:run -d src/data-source.ts",
+    "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/data-source.ts",
+    "migration:show": "typeorm-ts-node-commonjs migration:show -d src/data-source.ts"
   }
 }
 ```
 
-**Step 4: Update Target Frameworks**
-Update each `.csproj` (or `Directory.Build.props` if centralized):
-```xml
-<PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <LangVersion>14</LangVersion>
-</PropertyGroup>
-```
+### TypeORM: Generate and Review a Migration
 
-**Step 5: Update Packages**
 ```bash
-# Update all Microsoft.* packages to 10.x
-dotnet outdated --upgrade Major --include Microsoft.*
-dotnet build  # Fix compilation issues
+# Generate based on entity diff vs current schema
+npm run migration:generate -- src/migrations/AddOrderStatus
+
+# Review the generated file BEFORE committing
+# TypeORM auto-generates: ALTER TABLE "orders" ADD "status" varchar
+# You may need to add: UPDATE "orders" SET "status" = 'pending' WHERE status IS NULL
+# And then: ALTER TABLE "orders" ALTER COLUMN "status" SET NOT NULL
+
+# Apply to dev DB
+npm run migration:run
+
+# Revert last migration
+npm run migration:revert
 ```
 
-**Step 6: Adopt New Features**
-Reference `knowledge/dotnet-whats-new.md`:
-- Replace `DateTime.Now`/`DateTime.UtcNow` with `TimeProvider`
-- Use `HybridCache` instead of `IDistributedCache`
-- Convert classes to primary constructors where appropriate
-- Use collection expressions: `int[] x = [1, 2, 3]`
-- Use the `field` keyword in property accessors
+### TypeORM: Manual Migration with Data Backfill
 
-**Step 7: Verify**
+```typescript
+// src/migrations/1700000000000-AddOrderStatus.ts
+import { MigrationInterface, QueryRunner } from 'typeorm';
+
+export class AddOrderStatus1700000000000 implements MigrationInterface {
+  async up(queryRunner: QueryRunner): Promise<void> {
+    // 1. Add nullable column
+    await queryRunner.query(`
+      ALTER TABLE "orders" ADD "status" varchar
+    `);
+
+    // 2. Backfill existing rows
+    await queryRunner.query(`
+      UPDATE "orders" SET "status" = 'pending' WHERE "status" IS NULL
+    `);
+
+    // 3. Add NOT NULL constraint after backfill
+    await queryRunner.query(`
+      ALTER TABLE "orders" ALTER COLUMN "status" SET NOT NULL
+    `);
+  }
+
+  async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      ALTER TABLE "orders" DROP COLUMN "status"
+    `);
+  }
+}
+```
+
+### Prisma: Migration Workflow
+
 ```bash
-dotnet build                    # Clean build
-dotnet test                     # All tests pass
-dotnet format --verify-no-changes  # Formatting consistent
+# Dev: generate migration and apply
+npx prisma migrate dev --name add_order_status
+
+# Check migration status
+npx prisma migrate status
+
+# Production: apply pending migrations (no schema push, no dev artifacts)
+npx prisma migrate deploy
+
+# Reset dev DB (destructive — never in production)
+npx prisma migrate reset
 ```
 
-Then run the health check workflow from the `project-setup` skill to establish the new baseline.
+### Prisma: Schema Change in schema.prisma
+
+```prisma
+model Order {
+  id         String   @id @default(uuid())
+  customerId String
+  status     String   @default("pending")  // new field
+  createdAt  DateTime @default(now())
+}
+```
+
+### Zero-Downtime: Expand-Contract Pattern
+
+```
+Deploy 1 (Expand):
+  - Add new column "customer_email" (nullable, no constraints)
+  - Old app ignores it; new app writes to it
+
+Deploy 2 (Backfill):
+  - Run migration: UPDATE orders SET customer_email = customers.email FROM customers
+  - Add NOT NULL constraint after backfill
+
+Deploy 3 (Contract):
+  - Remove old "email" column (no longer read by any deployed app version)
+```
+
+```typescript
+// Deploy 1: expand migration
+await queryRunner.query(`
+  ALTER TABLE "orders" ADD "customer_email" varchar
+`);
+
+// Deploy 3: contract migration (after old app fully retired)
+await queryRunner.query(`
+  ALTER TABLE "orders" DROP COLUMN "email"
+`);
+```
 
 ## Anti-patterns
 
-### Applying Migrations Without Reviewing SQL
+### synchronize: true in Production
 
-```bash
-# BAD — Blindly applying
-dotnet ef database update
-# Oops, dropped a column with 10 million rows of data
+```typescript
+// BAD — TypeORM auto-applies schema diff on app start; can drop columns
+TypeOrmModule.forRoot({
+  synchronize: true,  // NEVER in production
+})
+
+// GOOD — always false in production; use migrations
+TypeOrmModule.forRoot({
+  synchronize: false,
+  migrations: [...],
+})
 ```
 
+### Mutating Applied Migrations
+
 ```bash
-# GOOD — Review first, then apply
-dotnet ef migrations script --idempotent > review.sql
-# Read review.sql, check for DROP, ALTER, data loss
-dotnet ef database update
+# BAD — editing a migration that has already run on staging or production
+# TypeORM tracks migration checksums; this will cause runtime errors or
+# silent divergence between environments
+
+# GOOD — generate a new migration for subsequent changes
+npm run migration:generate -- src/migrations/FixOrderStatusConstraint
 ```
 
-### Updating All Packages at Once
+### Deploying App Before Migration Runs
 
-```bash
-# BAD — Update everything, pray it works
-dotnet outdated --upgrade Major
-dotnet build  # 47 errors — which package caused this?
 ```
+# BAD order:
+1. Deploy new app version (expects "status" column)
+2. Run migration (adds "status" column)
+# Window between 1 and 2: app crashes with "column does not exist"
 
-```bash
-# GOOD — One at a time, build after each
-dotnet add package WolverineFx
-dotnet build && dotnet test  # ✅
-dotnet add package Serilog --version 5.0.0
-dotnet build && dotnet test  # ❌ — Serilog 5.0 broke the sink config
-```
-
-### Skipping Tests After Migration
-
-```bash
-# BAD
-dotnet ef database update  # "It compiled, ship it"
-```
-
-```bash
-# GOOD
-dotnet ef database update
-dotnet test  # Run FULL test suite, especially integration tests
-# Integration tests with Testcontainers will catch schema mismatches
-```
-
-### Multiple Unrelated Changes in One Migration
-
-```bash
-# BAD — Three unrelated changes in one migration
-dotnet ef migrations add UpdateEverything
-# Contains: new table + renamed column + dropped index
-# Rollback is all-or-nothing for three unrelated changes
-```
-
-```bash
-# GOOD — One change per migration
-dotnet ef migrations add AddShippingAddressTable
-dotnet ef migrations add RenameCustomerEmailColumn
-dotnet ef migrations add DropUnusedOrderIndex
-# Each can be rolled back independently
+# GOOD order:
+1. Run migration (expand: add nullable "status" column)
+2. Deploy new app version (reads and writes "status")
 ```
 
 ## Decision Guide
 
-| Scenario | Workflow | Key Step |
-|----------|----------|----------|
-| New database table | EF Core Migration | Create entity + config + migration |
-| Column rename | EF Core Migration | Review SQL for data preservation |
-| Add index | EF Core Migration | Check for long locks on large tables |
-| Data transformation | EF Core Migration + raw SQL | Custom `Up()` with SQL statements |
-| Outdated packages | NuGet Update | One at a time, build + test between each |
-| Vulnerable package | NuGet Update (urgent) | Update immediately, test, deploy |
-| .NET version upgrade | .NET Migration | Phase 1-4, verify at each phase |
-| Add new package | NuGet Update | Check package-recommendations.md first |
-| `ExecuteUpdateAsync` vs migration | Depends | Migration for schema; `ExecuteUpdateAsync` for bulk data updates at runtime |
-| Modify existing migration | **Never** if already applied | Create new migration instead |
+| Scenario | Recommendation |
+|---|---|
+| ORM choice | TypeORM (code-first) or Prisma (schema-first); both supported |
+| Adding a new non-null column | Expand: add nullable → backfill → NOT NULL constraint |
+| Renaming a column | Expand-contract over 2 deploys |
+| Dropping a column | Remove all code references first, then drop in a migration |
+| Production migration run | `prisma migrate deploy` or `typeorm migration:run` in CI/CD |
+| Testing migration in CI | Run migration as a CI step before E2E tests |

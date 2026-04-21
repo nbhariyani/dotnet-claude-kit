@@ -1,180 +1,214 @@
 ---
 name: docker
 description: >
-  Docker containerization for .NET 10 applications. Covers multi-stage builds,
-  .NET container images, non-root user configuration, health checks, and
-  .dockerignore.
-  Load this skill when containerizing an application, optimizing image size,
-  setting up Docker Compose for local development, or when the user mentions
-  "Docker", "Dockerfile", "container", "docker-compose", "image", "multi-stage",
-  "non-root", ".dockerignore", "container health check", or "dotnet publish container".
+  Dockerizing NestJS applications. Load this skill when writing a Dockerfile,
+  containerizing a NestJS app, building multi-stage Docker images, configuring
+  docker-compose with postgres and redis, or setting up .dockerignore.
 ---
-
-# Docker
 
 ## Core Principles
 
-1. **Multi-stage builds always** — Separate build and runtime stages. Build in the SDK image, run in the ASP.NET runtime image.
-2. **Non-root by default** — .NET container images support `USER app` by default since .NET 8. Never run as root in production.
-3. **Layer caching matters** — Copy `.csproj` files and restore before copying source code. This caches NuGet dependencies across builds.
-4. **Health checks in the container** — Use `HEALTHCHECK` in Dockerfile or configure in Docker Compose / orchestrator.
+1. **Three-stage Dockerfile: deps → build → production.** The production image must
+   not contain devDependencies, build tools, or source files. A well-structured
+   multi-stage build cuts image size by 60–80%.
+
+2. **Never run as root.** Use `USER node` (built into the official node images) in
+   the production stage. Root containers are a security liability in any environment.
+
+3. **HEALTHCHECK in every production image.** Kubernetes and Docker Compose rely on
+   health checks to know when a container is ready and when to restart it.
+
+4. **.dockerignore is mandatory.** Without it, `node_modules`, `.git`, and local
+   `.env` files are sent to the build context, slowing builds and risking secret leaks.
+
+5. **Pin base image minor versions.** `node:22-alpine` is stable; `node:alpine` is
+   a floating tag that can change and break builds silently.
 
 ## Patterns
 
-### Multi-Stage Dockerfile for Web API
+### Three-Stage Dockerfile
 
 ```dockerfile
-# Stage 1: Build
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-WORKDIR /src
-
-# Copy project files and restore (cached layer)
-COPY ["src/MyApp.Api/MyApp.Api.csproj", "src/MyApp.Api/"]
-COPY ["src/MyApp.Domain/MyApp.Domain.csproj", "src/MyApp.Domain/"]
-COPY ["Directory.Build.props", "."]
-COPY ["Directory.Packages.props", "."]
-RUN dotnet restore "src/MyApp.Api/MyApp.Api.csproj"
-
-# Copy everything and build
-COPY . .
-RUN dotnet publish "src/MyApp.Api/MyApp.Api.csproj" \
-    -c Release \
-    -o /app/publish \
-    --no-restore
-
-# Stage 2: Runtime
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+# ---- Stage 1: install all dependencies ----
+FROM node:22-alpine AS deps
 WORKDIR /app
+COPY package*.json ./
+RUN npm ci
 
-# Non-root user (default in .NET 8+ images)
-USER app
+# ---- Stage 2: build ----
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npm run build
 
-COPY --from=build /app/publish .
+# ---- Stage 3: production image ----
+FROM node:22-alpine AS production
+WORKDIR /app
+ENV NODE_ENV=production
 
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD ["dotnet", "MyApp.Api.dll", "--urls", "http://localhost:8080/health/live"]
+# Install only production dependencies in the final image
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
-ENTRYPOINT ["dotnet", "MyApp.Api.dll"]
+# Copy compiled output from build stage
+COPY --from=build /app/dist ./dist
+
+# Drop root privileges
+USER node
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
+
+CMD ["node", "dist/main"]
 ```
 
 ### .dockerignore
 
 ```
-**/.git
-**/.vs
-**/bin
-**/obj
-**/node_modules
-**/Dockerfile*
-**/docker-compose*
-**/tests
+node_modules
+dist
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.md
+coverage
+.nyc_output
+.vscode
+.idea
+npm-debug.log*
 ```
 
-### Docker Compose for Local Development
-
-Key .NET-specific concerns — pass connection strings via environment, use `depends_on` with health checks:
+### docker-compose.yml (development)
 
 ```yaml
+version: '3.9'
+
 services:
   api:
     build:
       context: .
-      dockerfile: src/MyApp.Api/Dockerfile
+      target: build          # use build stage in dev (has source maps, devDeps)
     ports:
-      - "5000:8080"
+      - '3000:3000'
     environment:
-      - ASPNETCORE_ENVIRONMENT=Development
-      - ConnectionStrings__Default=Host=postgres;Database=myapp;Username=postgres;Password=postgres
-      - ConnectionStrings__Redis=redis:6379
+      NODE_ENV: development
+      DATABASE_URL: postgres://dev:dev@postgres:5432/appdb
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    volumes:
+      - .:/app
+      - /app/node_modules    # prevent host node_modules from overwriting container
     depends_on:
       postgres:
         condition: service_healthy
-  # Add postgres/redis services with healthcheck — standard boilerplate
+      redis:
+        condition: service_healthy
+    command: npm run start:dev
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: appdb
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dev -d appdb']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
 ```
 
-### Optimized Build with .slnx
+### Build and Run Locally
 
-For solutions with multiple projects, restore only the necessary projects.
+```bash
+# Build production image
+docker build --target production -t my-api:local .
 
-```dockerfile
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-WORKDIR /src
+# Run production image with env file
+docker run --env-file .env -p 3000:3000 my-api:local
 
-# Copy solution and all project files
-COPY *.slnx .
-COPY Directory.Build.props .
-COPY Directory.Packages.props .
-COPY src/**/*.csproj ./src/
-
-# Restore project structure
-RUN for file in src/**/*.csproj; do \
-    mkdir -p $(dirname $file) && mv $file $(dirname $file)/; \
-    done
-RUN dotnet restore
-
-COPY . .
-RUN dotnet publish src/MyApp.Api -c Release -o /app/publish --no-restore
-```
-
-### Health Check Endpoint
-
-```csharp
-// In Program.cs — lightweight health endpoint for Docker
-app.MapGet("/health/live", () => Results.Ok("healthy"))
-    .ExcludeFromDescription();
+# Bring up full stack (dev)
+docker compose up --build
 ```
 
 ## Anti-patterns
 
-### Don't Use SDK Image for Runtime
+### Single-Stage Dockerfile with devDependencies
 
 ```dockerfile
-# BAD — SDK image is 900MB+, includes compilers
-FROM mcr.microsoft.com/dotnet/sdk:10.0
+# BAD — image includes typescript, jest, etc.; 3-4x larger than necessary
+FROM node:22-alpine
+WORKDIR /app
 COPY . .
-RUN dotnet run
+RUN npm install
+RUN npm run build
+CMD ["node", "dist/main"]
 
-# GOOD — separate build and runtime, runtime image is ~200MB
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
+# GOOD — see three-stage pattern above
 ```
 
-### Don't Copy Everything Before Restore
+### Running as Root
 
 ```dockerfile
-# BAD — any source change invalidates the NuGet cache
-COPY . .
-RUN dotnet restore
+# BAD — container runs as root by default
+FROM node:22-alpine
+WORKDIR /app
+COPY --from=build /app/dist ./dist
+CMD ["node", "dist/main"]
 
-# GOOD — copy only project files first, then restore
-COPY ["src/MyApp.Api/MyApp.Api.csproj", "src/MyApp.Api/"]
-RUN dotnet restore "src/MyApp.Api/MyApp.Api.csproj"
-COPY . .
+# GOOD — drop privileges before CMD
+USER node
+CMD ["node", "dist/main"]
 ```
 
-### Don't Run as Root
+### Missing .dockerignore
 
 ```dockerfile
-# BAD — running as root (security risk)
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
-COPY --from=build /app .
-ENTRYPOINT ["dotnet", "MyApp.Api.dll"]
+# BAD — without .dockerignore, COPY . . sends node_modules (500 MB+) to daemon
+COPY . .
 
-# GOOD — use the built-in non-root user
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
-USER app
-COPY --from=build /app .
-ENTRYPOINT ["dotnet", "MyApp.Api.dll"]
+# GOOD — add .dockerignore (see above), then COPY . . is safe
+```
+
+### Hardcoded Secrets in Dockerfile
+
+```dockerfile
+# BAD — secret baked into image layer
+ENV JWT_SECRET=my-super-secret
+
+# GOOD — pass at runtime via --env-file or Kubernetes secret
+docker run --env-file .env my-api:local
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Web API container | Multi-stage build with aspnet runtime image |
-| Worker service | Multi-stage build with dotnet/runtime image |
-| Local development | Docker Compose with service dependencies |
-| CI builds | Multi-stage build (self-contained) |
-| Image size optimization | Use Alpine variant + trimming for small images |
-| Health monitoring | HEALTHCHECK instruction + /health endpoint |
-| Secrets | Environment variables or mounted secrets, never in image |
+|---|---|
+| Production image size matters | Three-stage build; `npm ci --omit=dev` in final stage |
+| Development hot reload | `docker compose` with `volumes` mount + `start:dev` |
+| CI build caching | `COPY package*.json ./` before `COPY . .` to cache npm layer |
+| Health check endpoint | `GET /api/health` returns 200; see health-check skill |
+| Multi-arch (arm64 + amd64) | Use `docker buildx`; see container-publish skill |
+| Secrets injection | Runtime env vars (`--env-file`) or Kubernetes Secrets |

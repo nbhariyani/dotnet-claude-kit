@@ -1,0 +1,102 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to publish (e.g. v1.2.3)'
+        required: true
+
+jobs:
+  publish:
+    name: Publish nestjs-claude-kit to npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # for npm provenance
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate plugin schema
+        run: |
+          echo "Validating .claude-plugin/plugin.json..."
+          node -e "
+            const fs = require('fs');
+            const plugin = JSON.parse(fs.readFileSync('.claude-plugin/plugin.json', 'utf8'));
+            if (!plugin.name || !plugin.version) {
+              process.stderr.write('ERROR: plugin.json missing required fields\\n');
+              process.exit(1);
+            }
+            console.log('Plugin:', plugin.name, 'v' + plugin.version);
+          "
+
+      - name: Validate skill files (max 400 lines)
+        run: |
+          FAILED=0
+          while IFS= read -r file; do
+            LINES=$(wc -l < "$file")
+            if [ "$LINES" -gt 400 ]; then
+              echo "ERROR: $file exceeds 400 lines ($LINES)"
+              FAILED=1
+            fi
+          done < <(find skills -name 'SKILL.md')
+          [ "$FAILED" -eq 0 ] || exit 1
+
+      - name: Validate command files (max 200 lines)
+        run: |
+          FAILED=0
+          while IFS= read -r file; do
+            LINES=$(wc -l < "$file")
+            if [ "$LINES" -gt 200 ]; then
+              echo "ERROR: $file exceeds 200 lines ($LINES)"
+              FAILED=1
+            fi
+          done < <(find commands -name '*.md')
+          [ "$FAILED" -eq 0 ] || exit 1
+
+      - name: Validate rule files (max 100 lines)
+        run: |
+          FAILED=0
+          while IFS= read -r file; do
+            LINES=$(wc -l < "$file")
+            if [ "$LINES" -gt 100 ]; then
+              echo "ERROR: $file exceeds 100 lines ($LINES)"
+              FAILED=1
+            fi
+          done < <(find .claude/rules -name '*.md')
+          [ "$FAILED" -eq 0 ] || exit 1
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME:-${{ inputs.tag }}}"
+          VERSION="${VERSION#v}"
+          echo "Publishing version: $VERSION"
+          npm version "$VERSION" --no-git-tag-version
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          generate_release_notes: true
+          name: nestjs-claude-kit ${{ github.ref_name }}

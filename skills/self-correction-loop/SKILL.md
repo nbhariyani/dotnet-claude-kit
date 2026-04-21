@@ -1,182 +1,165 @@
 ---
 name: self-correction-loop
 description: >
-  Self-improving correction capture system. After ANY user correction, detect it,
-  generalize the lesson, and store it as a reusable rule in MEMORY.md. Ensures
-  Claude's mistake rate drops over time by compounding corrections into permanent
-  knowledge. Load this skill when a user corrects Claude's output, mentions
-  "remember this", "don't do that again", "learn from mistakes", "update memory",
-  or when starting a new session (to review existing rules).
+  Self-improving correction capture system. After any user correction, detect
+  it, generalize the lesson, and store it as a reusable rule in MEMORY.md.
+  Ensures repeated mistakes turn into project knowledge instead of repeating
+  across sessions.
 ---
 
 # Self-Correction Loop
 
 ## Core Principles
 
-1. **Every correction is a compounding investment** — A correction costs the user 30 seconds today but saves hours across all future sessions. Treat every correction as high-priority knowledge capture, not a one-time fix.
-
-2. **Generalize before storing** — "Use `TimeProvider` not `DateTime.Now` in the Orders module" becomes "Always use `TimeProvider` instead of `DateTime.Now/UtcNow` across all modules." Specific corrections become class-level rules.
-
-3. **Categorize for retrieval** — Rules organized by category (Code Style, Architecture, Naming, Testing, Data Access, API Design, Configuration, Performance) are findable. Uncategorized rules are forgotten.
-
-4. **Deduplicate aggressively** — Before adding a rule, scan existing rules for overlap. Update an existing rule rather than adding a near-duplicate. Memory bloat defeats the purpose.
-
-5. **Review memory at session start** — The first thing Claude should do in a new session is check `MEMORY.md` for project-specific rules. Knowledge captured but never reviewed is wasted effort.
+1. **Every correction is useful signal** - A quick correction from the user can prevent many repeated mistakes later.
+2. **Generalize before storing** - Convert one-off phrasing into a reusable project rule whenever possible.
+3. **Categorize for retrieval** - Store rules where they can actually be found and reused.
+4. **Deduplicate aggressively** - Update an existing rule instead of creating near-duplicates.
+5. **Review memory at session start** - Memory only matters if it is consulted before new work begins.
 
 ## Patterns
 
-### Correction Detection & Capture Flow
+### Correction Detection and Capture Flow
 
-When a user corrects Claude's output, follow this exact sequence:
-
-```
-1. DETECT — User says something like:
+```text
+1. DETECT
+   User says:
    - "No, use X instead of Y"
-   - "We don't do it that way here"
-   - "That's wrong, it should be..."
-   - "Always/Never do X in this project"
-   - "Remember this for next time"
+   - "We do not do it that way here"
+   - "Remember this"
+   - "Always/never do X in this project"
 
-2. ACKNOWLEDGE — Confirm understanding of the correction
-   "Got it — using HybridCache instead of IMemoryCache."
+2. ACKNOWLEDGE
+   Confirm the correction clearly.
 
-3. GENERALIZE — Extract the class-level rule
-   Specific: "Don't use IMemoryCache in the Orders endpoint"
-   General:  "Always use HybridCache instead of IMemoryCache — it provides
-              stampede protection and L1+L2 caching out of the box."
+3. GENERALIZE
+   Turn the specific correction into a broader reusable rule.
 
-4. CHECK — Scan MEMORY.md for existing related rules
-   - If a related rule exists, UPDATE it (broader scope, better wording)
-   - If no related rule exists, ADD a new one under the right category
+4. CHECK
+   Search MEMORY.md for overlap or contradiction.
 
-5. STORE — Write to MEMORY.md under the appropriate category
+5. STORE
+   Add or update the rule in the right category.
 
-6. CONFIRM — Tell the user what was captured
-   "Added to Memory > Data Access: Always use HybridCache over IMemoryCache."
+6. CONFIRM
+   Tell the user what was captured.
 ```
 
-### MEMORY.md Organization Format
-
-Structure memory by category with consistent rule formatting:
+### MEMORY.md Organization
 
 ```markdown
 # Project Memory
 
-## Code Style
-- Always use file-scoped namespaces — never block-scoped
-- Use primary constructors for DI injection in services and handlers
-
 ## Architecture
-- This project uses Vertical Slice Architecture — one file per feature operation
+- Feature modules own their DTOs and services locally unless explicitly shared
 
-## Data Access
-- Always use HybridCache over IMemoryCache — stampede protection + L1/L2
-- Never use repository pattern over EF Core — use DbContext directly
+## Configuration
+- Use ConfigService, not direct `process.env`, in application code
+
+## API Design
+- Controllers return DTOs, not ORM entities
 
 ## Testing
-- Integration tests use ApiFixture base class — never raw WebApplicationFactory
+- Prefer Jest + SuperTest for HTTP flows
 ```
 
-Use categories: Code Style, Architecture, Naming, Data Access, API Design, Testing, Configuration, Performance. Each rule: one line, actionable, with rationale after the dash.
+Suggested categories:
 
-### Rule Generalization: Specific to Class
+- Architecture
+- Naming
+- API Design
+- Persistence
+- Testing
+- Configuration
+- Performance
+- Security
 
-Transform specific corrections into broadly applicable rules:
+### Rule Generalization
 
+Example:
+
+```text
+SPECIFIC:
+"Do not import from another module's private service file"
+
+GENERALIZED:
+"Modules communicate through exports or shared contracts, not private cross-module imports"
 ```
-SPECIFIC CORRECTION:
-"Don't use DateTime.Now in the CreateOrder handler"
 
-GENERALIZATION STEPS:
-1. Is this specific to CreateOrder? → No, it's a .NET-wide concern
-2. Is this specific to handlers? → No, applies everywhere
-3. What's the underlying principle? → TimeProvider is testable, DateTime is not
-4. What's the broadest correct statement?
+Another example:
 
-GENERALIZED RULE:
-"Always use TimeProvider instead of DateTime.Now/UtcNow — TimeProvider is
-injectable and testable. This applies to all production code."
+```text
+SPECIFIC:
+"Use ConfigService here, not process.env"
+
+GENERALIZED:
+"Use ConfigService instead of direct process.env access in NestJS application code"
 ```
 
 ### Periodic Memory Audit
 
-Every 5-10 sessions (or when memory exceeds 50 rules), audit for quality:
+Review memory periodically to:
 
-```
-AUDIT CHECKLIST:
-1. Remove rules that contradict each other — keep the most recent
-2. Merge rules that overlap — combine into a single, clearer rule
-3. Remove rules that are now obvious (e.g., captured early but now second nature)
-4. Verify rules are still accurate — .NET evolves, patterns change
-5. Check that categories are balanced — a category with 20+ rules needs subcategories
-```
+- remove contradictions
+- merge overlapping rules
+- delete stale rules
+- keep categories balanced and readable
 
 ### Session-Start Memory Review
 
-At session start, read MEMORY.md and apply relevant rules proactively. Do not wait to be reminded of rules that were already captured.
+At the start of a session, check memory for rules relevant to the likely task before generating code.
 
 ## Anti-patterns
 
 ### Ignoring Corrections
 
-```
-// BAD — user corrects, Claude fixes but doesn't capture
-User: "No, we use HybridCache here, not IMemoryCache"
-Claude: "Fixed. Here's the updated code with HybridCache..."
-*Next session: makes the same mistake*
+```text
+BAD:
+Fix the immediate issue but do not capture the rule
 
-// GOOD — fix AND capture
-User: "No, we use HybridCache here, not IMemoryCache"
-Claude: "Fixed. Here's the updated code with HybridCache.
-         Added to Memory > Data Access: Always use HybridCache over IMemoryCache."
-*Next session: checks memory, uses HybridCache from the start*
+GOOD:
+Fix it and store the reusable lesson
 ```
 
 ### Overly Specific Rules
 
-```
-// BAD — rule is too narrow to be useful
-"In the CreateOrder handler on line 47, use TimeProvider"
+```text
+BAD:
+"In orders.controller.ts line 44, use ConfigService"
 
-// GOOD — generalized to apply broadly
-"Always use TimeProvider instead of DateTime.Now/UtcNow in all production code"
+GOOD:
+"Use ConfigService instead of direct process.env access in app code"
 ```
 
 ### Never Reviewing Memory
 
-```
-// BAD — 50 rules captured, none ever reviewed
-MEMORY.md grows to 200 lines, contains duplicates and contradictions,
-Claude doesn't read it because it's too long to be useful
+```text
+BAD:
+MEMORY.md grows but is never consulted
 
-// GOOD — periodic audit keeps memory lean and accurate
-MEMORY.md stays under 80 rules, well-categorized, no duplicates,
-Claude reads it at session start and applies rules proactively
+GOOD:
+Review relevant memory at session start and before major edits
 ```
 
-### Storing Session-Specific Context
+### Storing Temporary Session State as Permanent Memory
 
-```
-// BAD — temporary state saved as permanent memory
-"Currently working on the Orders module refactor, file is at src/Orders/Handler.cs"
+```text
+BAD:
+"Currently working in orders.module.ts"
 
-// GOOD — only permanent, reusable knowledge
-"The Orders module uses VSA with one file per feature under Features/"
+GOOD:
+"Orders follows feature-module structure with local DTOs"
 ```
 
 ## Decision Guide
 
 | Scenario | Action |
 |----------|--------|
-| User explicitly corrects Claude's code | Capture generalized rule in MEMORY.md |
-| User says "remember this" or "always/never" | Capture exactly as stated, generalize if possible |
-| Same correction given twice | High priority — the rule wasn't captured or wasn't reviewed |
-| Correction is project-specific | Store in MEMORY.md with project context |
-| Correction is universal .NET | Store in MEMORY.md — it applies to this project |
-| MEMORY.md exceeds 50 rules | Trigger an audit — deduplicate, merge, prune |
-| Starting a new session | Review MEMORY.md before writing any code |
-| Rule contradicts an existing rule | Keep the most recent correction, remove the old one |
-| Correction is about a one-time task | Don't store — only capture reusable patterns |
-| User asks to forget a rule | Remove it from MEMORY.md immediately |
-| Pattern observed but not yet confirmed | Create an instinct via `instinct-system` skill (confidence 0.3) instead of a MEMORY.md rule |
-| Instinct reaches 0.9 confidence | Promote to MEMORY.md as a permanent rule (see `instinct-system` skill) |
+| User explicitly corrects Claude | Capture a generalized rule |
+| User says "remember this" | Store it, generalized if possible |
+| Same correction appears twice | Treat as high-priority memory |
+| Rule is project-specific | Store in project memory |
+| Rule is temporary or one-off | Do not store it |
+| Memory grows too large | Audit, merge, prune |
+| Starting a new session | Review relevant memory first |
+| User asks to forget a rule | Remove it immediately |

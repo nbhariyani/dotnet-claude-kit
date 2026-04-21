@@ -1,119 +1,80 @@
-# Contributing to dotnet-claude-kit
+# Contributing to nestjs-claude-kit
 
-Thank you for your interest in contributing! This guide covers how to add skills, knowledge documents, templates, and MCP improvements.
+## Before You Start
 
-## Getting Started
+1. Read [CLAUDE.md](CLAUDE.md).
+2. Read [AGENTS.md](AGENTS.md).
+3. Check the spec at [docs/nestjs-claude-kit-SPEC.md](docs/nestjs-claude-kit-SPEC.md).
 
-1. Fork and clone the repository
-2. Read the spec in `docs/dotnet-claude-kit-SPEC.md`
-3. Read `CLAUDE.md` for repo development conventions
-4. Check open issues for areas where help is needed
+## What We Maintain
 
-## Contribution Areas
+The repo is made of:
 
-### Skills
+- `skills/` for technical and workflow guidance
+- `agents/` for role-based routing
+- `commands/` for common workflows
+- `templates/` for project starting points
+- `knowledge/` for supporting reference material
+- `mcp/cwm-ts-navigator/` for TypeScript code navigation
+- `.claude/rules/` for always-on repo guidance
 
-Skills are the core of dotnet-claude-kit. Each skill lives at `skills/<skill-name>/SKILL.md`.
+## Contribution Standards
 
-**Before creating a new skill:**
-- Check the [existing skills](#current-skills) to avoid overlap
-- Open a [Skill Proposal](../../issues/new?template=new-skill.yml) issue for discussion
-- Review the skill format in `CLAUDE.md`
+- Keep skills concise and practical.
+- Prefer modern NestJS and TypeScript patterns.
+- Keep examples aligned with the current stack in the repo.
+- Avoid reintroducing `.NET` or C# guidance unless the file is explicitly archival.
+- Keep cross-references accurate when files are renamed or replaced.
 
-**Skill requirements:**
-- YAML frontmatter with `name` and `description`
-- Required sections: Core Principles, Patterns, Anti-patterns, Decision Guide
-- Maximum 400 lines
-- Every recommendation has a "why"
-- Code examples use C# 14 / .NET 10 patterns
-- BAD/GOOD code comparisons in Anti-patterns section
+## Skills
 
-### Knowledge Documents
+Each skill lives at `skills/<skill-name>/SKILL.md`.
 
-Knowledge files in `knowledge/` are reference material, not skills.
+A strong skill should include:
 
-- `dotnet-whats-new.md` — Updated per .NET preview/release
-- `common-antipatterns.md` — Patterns Claude should never generate
-- `package-recommendations.md` — Vetted NuGet packages
-- `breaking-changes.md` — Migration gotchas
-- `decisions/*.md` — Architecture Decision Records
+- a clear purpose
+- practical defaults
+- short code examples
+- anti-patterns
+- a decision guide
 
-**To update knowledge:**
-- Open a [Knowledge Update](../../issues/new?template=new-knowledge.yml) issue
-- Verify information against official Microsoft documentation
-- Include links to sources
+## Agents and Commands
 
-### Templates
+Agent and command docs should stay aligned with:
 
-Templates in `templates/<type>/` provide drop-in `CLAUDE.md` files for user projects.
+- current skills
+- current routing rules in `AGENTS.md`
+- current MCP tooling
+- current templates
 
-Each template needs:
-- `CLAUDE.md` — The drop-in file with project context, skills references, commands
-- `README.md` — When and how to use the template
+## MCP Server
 
-### Commands
+The MCP server for this repo lives at `mcp/cwm-ts-navigator/`.
 
-Commands in `commands/` are lightweight orchestrators that invoke skills and agents.
-
-**Command requirements:**
-- YAML frontmatter with `description`
-- Required sections: What, When, How, Example, Related
-- Maximum 200 lines
-- Commands invoke skills/agents — they don't contain the logic themselves
-
-### Rules
-
-Rules in `rules/dotnet/` are always-loaded conventions.
-
-**Rule requirements:**
-- YAML frontmatter with `alwaysApply: true` and `description`
-- Maximum 100 lines (rules are always in context — every line costs tokens)
-- Prescriptive DO/DON'T format with brief rationale for each rule
-- All rules combined should stay under ~600 lines total
-
-### Roslyn MCP Server
-
-The MCP server at `mcp/CWM.RoslynNavigator/` provides semantic analysis tools.
+Typical local workflow:
 
 ```bash
-# Build
-dotnet build mcp/CWM.RoslynNavigator/CWM.RoslynNavigator.slnx
-
-# Run tests
-dotnet test mcp/CWM.RoslynNavigator/CWM.RoslynNavigator.slnx
+cd mcp/cwm-ts-navigator
+npm install
+npm run build
+npm test
 ```
 
-**MCP contribution guidelines:**
-- Tools are read-only — no code generation or modifications
-- Responses are token-optimized — return paths, line numbers, and short snippets
-- Add integration tests using the `TestSolutionFixture`
-- Update the README with any new tool documentation
+## Verification
 
-## Development Workflow
+Before submitting significant changes:
 
-1. Create a feature branch from `main`
-2. Make your changes following the conventions in `CLAUDE.md`
-3. Ensure all validations pass:
-   - Skill frontmatter is valid
-   - Skill files are under 400 lines
-   - MCP server builds: `dotnet build mcp/CWM.RoslynNavigator/CWM.RoslynNavigator.slnx`
-   - MCP tests pass: `dotnet test mcp/CWM.RoslynNavigator/tests/CWM.RoslynNavigator.Tests.csproj`
-   - Code formatting: `dotnet format --verify-no-changes`
-4. Open a pull request with a clear description of changes
+- run the relevant build/test commands
+- check cross-links
+- keep docs aligned with actual repo contents
+- avoid stale stack references
 
-## Code of Conduct
+## Style
 
-Be kind, be constructive. We're building tools to make .NET development better for everyone.
+- Be specific and practical.
+- Prefer short sections over giant walls of text.
+- Keep examples current for NestJS, TypeScript, and the repo's current tools.
 
-## Architecture Decision Records
+## Collaboration
 
-For significant decisions about defaults or patterns, create an ADR:
-
-1. Copy `knowledge/decisions/template.md`
-2. Number it sequentially (e.g., `005-your-decision.md`)
-3. Fill in Context, Decision, and Consequences
-4. Submit as part of your PR
-
-## Questions?
-
-Open an issue or start a discussion. We're happy to help contributors get started.
+Be kind, be constructive, and leave the repo more internally consistent than you found it.

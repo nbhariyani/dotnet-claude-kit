@@ -1,287 +1,252 @@
 ---
 name: openapi
 description: >
-  Built-in OpenAPI support for .NET 10 applications. Covers document generation,
-  transformers, TypedResults metadata, security schemes, XML comments, build-time
-  generation, and multiple document support. No Swashbuckle needed.
-  Load this skill when setting up API documentation, customizing OpenAPI output,
-  adding security schemes to docs, or when the user mentions "OpenAPI",
-  "AddOpenApi", "MapOpenApi", "document transformer", "operation transformer",
-  "schema transformer", "OpenAPI 3.1", "API documentation", "Swashbuckle
-  replacement", "Produces", "WithSummary", "WithDescription", "ProblemDetails",
-  "Kiota", or "client generation".
+  OpenAPI/Swagger documentation for NestJS with @nestjs/swagger. Load this skill
+  when configuring Swagger UI, using @ApiProperty, @ApiTags, @ApiBearerAuth,
+  @ApiResponse, DocumentBuilder, generating swagger.json, or documenting DTOs.
 ---
-
-# OpenAPI
 
 ## Core Principles
 
-1. **Built-in, not Swashbuckle** — .NET 10 ships `Microsoft.AspNetCore.OpenApi` as the official, framework-maintained OpenAPI solution. Swashbuckle was removed from templates in .NET 9 and is no longer recommended.
-2. **TypedResults drive the schema** — `TypedResults.Ok<T>()` automatically generates correct OpenAPI response schemas. `Results.Ok()` does not. Always use `TypedResults`.
-3. **Transformers over workarounds** — Document, operation, and schema transformers compose cleanly. Use them for security schemes, global responses, and schema customization.
-4. **Metadata on every endpoint** — Use `.WithName()`, `.WithSummary()`, `.WithTags()` on every endpoint. This metadata feeds directly into the OpenAPI spec and client generators.
+1. **DocumentBuilder setup happens before `app.listen()`.** Swagger scans routes
+   at setup time. Calling `SwaggerModule.setup()` after `app.listen()` works in some
+   versions but is unreliable and the wrong order. Always set up Swagger as the last
+   step before `listen`.
+
+2. **Every DTO field needs `@ApiProperty` with `example` and `description`.** An
+   undocumented DTO field shows as `{}` in the spec. Tools that generate clients
+   from the spec produce broken types. One annotation per field is non-negotiable.
+
+3. **Every controller gets `@ApiTags`.** Without tags, all endpoints appear in a
+   single unsorted group in Swagger UI. Tags group endpoints by resource and are
+   essential for large APIs.
+
+4. **`@ApiBearerAuth()` on every protected controller.** Without it, the "Authorize"
+   button in Swagger UI does not apply to those routes and manual testing is tedious.
+
+5. **Write `swagger.json` to disk in CI.** This enables spec diffing in PRs,
+   generates client SDKs, and validates the spec in automated tests.
 
 ## Patterns
 
-### Basic Setup
+### DocumentBuilder and SwaggerModule Setup
 
-```csharp
-var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddOpenApi();
+```typescript
+// src/main.ts
+import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs';
 
-var app = builder.Build();
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create(AppModule);
+  const config = app.get(ConfigService);
 
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();  // Serves at /openapi/v1.json
-}
-```
+  app.setGlobalPrefix('api');
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
-### Endpoint Metadata
+  const spec = new DocumentBuilder()
+    .setTitle(config.getOrThrow<string>('APP_NAME'))
+    .setDescription('REST API documentation')
+    .setVersion('1.0')
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+      'access-token',
+    )
+    .addServer(`http://localhost:${config.get('PORT', 3000)}`, 'Local')
+    .build();
 
-```csharp
-group.MapPost("/", CreateOrder)
-    .WithName("CreateOrder")
-    .WithSummary("Create a new order")
-    .WithDescription("Creates a new order for the specified customer.")
-    .Produces<OrderResponse>(StatusCodes.Status201Created)
-    .ProducesValidationProblem()
-    .ProducesProblem(StatusCodes.Status500InternalServerError);
-```
+  const document = SwaggerModule.createDocument(app, spec);
 
-With `TypedResults`, response metadata is inferred automatically:
-
-```csharp
-static async Task<Results<Created<OrderResponse>, ValidationProblem>> CreateOrder(
-    CreateOrderRequest request, ISender sender, CancellationToken ct)
-{
-    var result = await sender.Send(new CreateOrder.Command(request), ct);
-    return result.IsSuccess
-        ? TypedResults.Created($"/api/orders/{result.Value.Id}", result.Value)
-        : TypedResults.ValidationProblem(result.Errors);
-}
-```
-
-### Bearer Token Security Scheme
-
-```csharp
-builder.Services.AddOpenApi(options =>
-{
-    options.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
-});
-
-internal sealed class BearerSecuritySchemeTransformer(
-    IAuthenticationSchemeProvider authSchemeProvider) : IOpenApiDocumentTransformer
-{
-    public async Task TransformAsync(OpenApiDocument document,
-        OpenApiDocumentTransformerContext context, CancellationToken ct)
-    {
-        var schemes = await authSchemeProvider.GetAllSchemesAsync();
-        if (!schemes.Any(s => s.Name == "Bearer"))
-            return;
-
-        document.Components ??= new OpenApiComponents();
-        document.Components.SecuritySchemes = new Dictionary<string, IOpenApiSecurityScheme>
-        {
-            ["Bearer"] = new OpenApiSecurityScheme
-            {
-                Type = SecuritySchemeType.Http,
-                Scheme = "bearer",
-                BearerFormat = "JWT",
-                In = ParameterLocation.Header
-            }
-        };
-
-        foreach (var operation in document.Paths.Values.SelectMany(p => p.Operations))
-        {
-            operation.Value.Security ??= [];
-            operation.Value.Security.Add(new OpenApiSecurityRequirement
-            {
-                [new OpenApiSecuritySchemeReference("Bearer", document)] = []
-            });
-        }
-    }
-}
-```
-
-### Document Info Transformer
-
-```csharp
-builder.Services.AddOpenApi(options =>
-{
-    options.AddDocumentTransformer((document, context, ct) =>
-    {
-        document.Info = new()
-        {
-            Title = "Checkout API",
-            Version = "v1",
-            Description = "API for processing orders and payments."
-        };
-        return Task.CompletedTask;
+  // Write spec to disk for CI diffing and client generation
+  if (config.get('NODE_ENV') !== 'production') {
+    fs.writeFileSync('./swagger.json', JSON.stringify(document, null, 2));
+    SwaggerModule.setup('docs', app, document, {
+      swaggerOptions: { persistAuthorization: true },
     });
-});
-```
+  }
 
-### Multiple OpenAPI Documents
-
-```csharp
-builder.Services.AddOpenApi("v1");
-builder.Services.AddOpenApi("internal", options =>
-{
-    options.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
-});
-
-// Endpoints choose their document via WithGroupName
-app.MapGet("/public", () => "Hello").WithGroupName("v1");
-app.MapGet("/admin", () => "Secret").WithGroupName("internal");
-```
-
-Endpoints without `.WithGroupName()` appear in all documents.
-
-### XML Documentation Comments (.NET 10)
-
-Enable in the project file — the source generator extracts `<summary>`, `<param>`, `<response>` tags automatically:
-
-```xml
-<PropertyGroup>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-</PropertyGroup>
-```
-
-```csharp
-/// <summary>Retrieves a project board by ID.</summary>
-/// <param name="id">The project board ID.</param>
-/// <response code="200">Returns the project board.</response>
-/// <response code="404">Board not found.</response>
-static async Task<Results<Ok<Board>, NotFound>> GetBoard(int id, AppDbContext db)
-{
-    var board = await db.Boards.FindAsync(id);
-    return board is not null ? TypedResults.Ok(board) : TypedResults.NotFound();
+  await app.listen(config.getOrThrow<number>('PORT'));
 }
 ```
 
-XML comments on lambdas are not captured by the compiler. Use named methods.
+### DTO with Full @ApiProperty Annotations
 
-### Schema Transformer
+```typescript
+// src/orders/dto/create-order.dto.ts
+import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsArray, ValidateNested, IsPositive } from 'class-validator';
+import { Type } from 'class-transformer';
 
-```csharp
-options.AddSchemaTransformer((schema, context, ct) =>
+export class CreateOrderItemDto {
+  @ApiProperty({
+    description: 'UUID of the product to order',
+    example: 'a3bb189e-8bf9-3888-9912-ace4e6543002',
+  })
+  @IsString()
+  @IsNotEmpty()
+  productId: string;
+
+  @ApiProperty({ description: 'Number of units to order', example: 2, minimum: 1 })
+  @IsPositive()
+  quantity: number;
+}
+
+export class CreateOrderDto {
+  @ApiProperty({ description: 'UUID of the customer placing the order', example: 'c-123' })
+  @IsString()
+  @IsNotEmpty()
+  customerId: string;
+
+  @ApiProperty({ type: [CreateOrderItemDto], description: 'Line items for this order' })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateOrderItemDto)
+  items: CreateOrderItemDto[];
+}
+```
+
+### Response DTO with @ApiProperty
+
+```typescript
+// src/orders/dto/order-response.dto.ts
+import { ApiProperty } from '@nestjs/swagger';
+
+export class OrderResponseDto {
+  @ApiProperty({ example: 'd290f1ee-6c54-4b01-90e6-d701748f0851' })
+  id: string;
+
+  @ApiProperty({ example: 'c-123' })
+  customerId: string;
+
+  @ApiProperty({ enum: ['pending', 'confirmed', 'shipped', 'cancelled'], example: 'pending' })
+  status: string;
+
+  @ApiProperty({ example: '2024-01-01T00:00:00.000Z' })
+  createdAt: Date;
+}
+```
+
+### Controller with @ApiTags, @ApiBearerAuth, @ApiResponse
+
+```typescript
+// src/orders/orders.controller.ts
+import { Controller, Post, Get, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiCreatedResponse,
+  ApiNotFoundResponse,
+} from '@nestjs/swagger';
+import { CreateOrderDto } from './dto/create-order.dto';
+import { OrderResponseDto } from './dto/order-response.dto';
+
+@ApiTags('orders')
+@ApiBearerAuth('access-token')
+@Controller({ version: '1', path: 'orders' })
+export class OrdersController {
+  constructor(private readonly ordersService: OrdersService) {}
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a new order' })
+  @ApiCreatedResponse({ type: OrderResponseDto, description: 'Order created successfully' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  async create(@Body() dto: CreateOrderDto): Promise<OrderResponseDto> {
+    return this.ordersService.create(dto);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get order by ID' })
+  @ApiParam({ name: 'id', description: 'Order UUID', example: 'd290f1ee-6c54-4b01-90e6-d701748f0851' })
+  @ApiResponse({ status: 200, type: OrderResponseDto })
+  @ApiNotFoundResponse({ description: 'Order not found' })
+  async findOne(@Param('id') id: string): Promise<OrderResponseDto> {
+    return this.ordersService.findById(id);
+  }
+}
+```
+
+### Writing swagger.json in CI
+
+```yaml
+# .github/workflows/ci.yml
+- name: Generate Swagger spec
+  run: |
+    NODE_ENV=ci npm run build
+    node -e "
+      const app = require('./dist/main');
+      // or use a dedicated script that calls createDocument without listen()
+    "
+
+# Better: dedicated script
+- name: Write swagger.json
+  run: npm run swagger:generate
+```
+
+```json
+// package.json
 {
-    if (context.JsonTypeInfo.Type == typeof(decimal))
-    {
-        schema.Format = "decimal";
-    }
-    return Task.CompletedTask;
-});
-```
-
-### Per-Endpoint Operation Transformer (.NET 10)
-
-```csharp
-app.MapGet("/old", () => "deprecated")
-    .AddOpenApiOperationTransformer((operation, context, ct) =>
-    {
-        operation.Deprecated = true;
-        return Task.CompletedTask;
-    });
-```
-
-### Build-Time Document Generation
-
-```xml
-<PackageReference Include="Microsoft.Extensions.ApiDescription.Server" Version="*" />
-<PropertyGroup>
-    <OpenApiDocumentsDirectory>.</OpenApiDocumentsDirectory>
-</PropertyGroup>
-```
-
-The spec file is generated in the output directory during build.
-
-### YAML Endpoint (.NET 10)
-
-```csharp
-app.MapOpenApi("/openapi/{documentName}.yaml");
+  "scripts": {
+    "swagger:generate": "ts-node src/generate-swagger.ts"
+  }
+}
 ```
 
 ## Anti-patterns
 
-### Don't Use Swashbuckle for New Projects
+### @ApiProperty with type: Object
 
-```csharp
-// BAD — removed from .NET 9+ templates, maintenance concerns
-builder.Services.AddSwaggerGen();
-app.UseSwagger();
-app.UseSwaggerUI();
+```typescript
+// BAD — generates empty schema {}; clients have no type information
+@ApiProperty({ type: Object })
+metadata: Record<string, unknown>;
 
-// GOOD — built-in OpenAPI
-builder.Services.AddOpenApi();
-app.MapOpenApi();
+// GOOD — create a typed DTO or use a union
+@ApiProperty({
+  type: 'object',
+  additionalProperties: { type: 'string' },
+  example: { region: 'eu-west', priority: 'high' },
+})
+metadata: Record<string, string>;
 ```
 
-### Don't Use WithOpenApi() in .NET 10
+### No @ApiTags
 
-```csharp
-// BAD — deprecated, produces ASPDEPR002 warning
-app.MapGet("/", () => "hello").WithOpenApi(op => { op.Deprecated = true; return op; });
+```typescript
+// BAD — all endpoints appear in "default" group; unusable for large APIs
+@Controller('orders')
+export class OrdersController { ... }
 
-// GOOD — use per-endpoint operation transformer
-app.MapGet("/", () => "hello")
-    .AddOpenApiOperationTransformer((op, ctx, ct) =>
-    {
-        op.Deprecated = true;
-        return Task.CompletedTask;
-    });
+// GOOD — grouped by resource
+@ApiTags('orders')
+@Controller('orders')
+export class OrdersController { ... }
 ```
 
-### Don't Use Untyped Results
+### SwaggerModule.setup After app.listen
 
-```csharp
-// BAD — Results.Ok doesn't contribute to OpenAPI schema
-static async Task<IResult> GetOrder(Guid id, AppDbContext db)
-{
-    var order = await db.Orders.FindAsync(id);
-    return order is not null ? Results.Ok(order) : Results.NotFound();
-}
+```typescript
+// BAD — may miss routes in some NestJS versions
+await app.listen(3000);
+SwaggerModule.setup('docs', app, document);
 
-// GOOD — TypedResults with union return type
-static async Task<Results<Ok<Order>, NotFound>> GetOrder(Guid id, AppDbContext db)
-{
-    var order = await db.Orders.FindAsync(id);
-    return order is not null ? TypedResults.Ok(order) : TypedResults.NotFound();
-}
-```
-
-### Don't Skip WithName on Endpoints
-
-```csharp
-// BAD — client generators produce poor method names without operationId
-group.MapGet("/{id:guid}", GetOrder);
-
-// GOOD — operationId feeds into generated client method names
-group.MapGet("/{id:guid}", GetOrder).WithName("GetOrder");
-```
-
-### Don't Use OpenApiAny in .NET 10
-
-```csharp
-// BAD — OpenApiAny types removed in Microsoft.OpenApi v2.x
-schema.Example = new OpenApiString("2025-01-01");
-
-// GOOD — use JsonNode from System.Text.Json.Nodes
-schema.Example = JsonValue.Create("2025-01-01");
+// GOOD — setup before listen
+SwaggerModule.setup('docs', app, document);
+await app.listen(3000);
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| New API project | `AddOpenApi()` + `MapOpenApi()` (built-in) |
-| API documentation UI | Scalar (`MapScalarApiReference()`) |
-| Security schemes in docs | Document transformer with `IOpenApiDocumentTransformer` |
-| Response documentation | `TypedResults` with union return types |
-| XML doc integration | `<GenerateDocumentationFile>true</GenerateDocumentationFile>` |
-| Multiple API versions | Multiple `AddOpenApi("v1")` calls + `WithGroupName()` |
-| Client code generation | Kiota (Microsoft recommended) or NSwag |
-| Build-time spec | `Microsoft.Extensions.ApiDescription.Server` package |
-| OpenAPI version | 3.1 (default in .NET 10), force 3.0 if consumers require it |
-| Per-endpoint customization | `.AddOpenApiOperationTransformer()` on the endpoint |
+|---|---|
+| New project | DocumentBuilder + SwaggerModule.setup in main.ts |
+| Protected endpoints | `@ApiBearerAuth('access-token')` on every secured controller |
+| Update DTO | `PartialType(CreateDto)` inherits all `@ApiProperty` annotations |
+| Enum field | `@ApiProperty({ enum: ['a', 'b'], example: 'a' })` |
+| Array response | `@ApiResponse({ status: 200, type: [OrderResponseDto] })` |
+| Generating client SDK | Write swagger.json in CI, feed to openapi-generator |
+| Non-production Swagger UI | Gate on `NODE_ENV !== 'production'` |

@@ -1,184 +1,88 @@
 ---
 description: >
-  MCP-powered multi-dimensional code review for .NET projects. Uses Roslyn
-  analysis tools for antipatterns, diagnostics, references, and dependency
-  graphs combined with structured manual review. Produces categorized findings
-  with severity levels and actionable fix suggestions.
-  Use when: "review", "code review", "PR review", "review this", "review my
-  code", "check code quality", "review changes".
+  Thorough code review using cwm-ts-navigator MCP tools. Covers TypeScript quality,
+  NestJS patterns, security, and test coverage. Triggers on: "review this code",
+  "code review", "check my PR", "review these changes".
 ---
 
-# /code-review -- MCP-Powered Code Review
+# /code-review
 
 ## What
 
-Performs a comprehensive, multi-dimensional code review that combines Roslyn MCP
-tool analysis with structured manual review. Every review follows a consistent
-7-step process and produces findings categorized by severity (Critical, Warning,
-Suggestion) with actionable remediation guidance.
-
-Review dimensions:
-- **Correctness** -- Logic errors, edge cases, null handling, async pitfalls
-- **Security** -- Auth gaps, injection risks, secret exposure, CORS issues
-- **Performance** -- N+1 queries, missing indexes, unnecessary allocations, missing cancellation
-- **Architecture** -- Layer violations, coupling issues, boundary breaches
-- **Maintainability** -- Naming, complexity, duplication, test coverage
-- **API Design** -- HTTP semantics, error responses, versioning, OpenAPI metadata
+Performs a structured code review using cwm-ts-navigator MCP tools first, then manual
+inspection. The automated first pass surfaces the highest-signal findings efficiently,
+so manual review focuses on logic and architecture rather than mechanical issues.
 
 ## When
 
-- "Review this code", "PR review", "code review"
-- Before merging a pull request
-- After a major refactor to verify no regressions or design drift
-- When onboarding to unfamiliar code and wanting a quality assessment
-- Periodic health checks on critical modules
+- "review this code"
+- "code review"
+- "check my PR"
+- "review these changes"
+- Before merging any non-trivial feature or fix
 
 ## How
 
-### Step 1: Scope the Review
+### Step 1: Automated First Pass
 
-Determine what is being reviewed:
-- **PR review**: Use `git diff main...HEAD` to identify all changed files
-- **File review**: Focus on specified files
-- **Module review**: Identify all files in the module/feature
+Run these tools in sequence — each narrows the focus for the next:
 
-Categorize changed files by layer (domain, application, infrastructure, API, tests).
+1. `detect_antipatterns` — NestJS-specific issues: `console.log`, missing `@ApiProperty`,
+   `synchronize:true`, direct cross-module service imports, missing `@Injectable`
+2. `detect_circular_deps` — circular module dependencies
+3. `get_diagnostics` — TypeScript compilation errors or type safety issues
+4. `find_dead_code` — unused exports, providers declared but never injected
+5. `get_test_coverage_map` — coverage gaps for new or modified code paths
 
-### Step 2: MCP Diagnostics Scan
+### Step 2: Manual Inspection
 
-Run Roslyn MCP tools on the review scope:
+After automated tools, review manually:
 
-```
-get_diagnostics(scope: "project", path: "affected-project")
-```
+- **Controller thinness** — Does the controller contain business logic? It should only
+  extract HTTP input and call a service method.
+- **Service complexity** — Is the service doing too much? Single responsibility per method.
+- **DTO completeness** — Every field has `@ApiProperty` and appropriate validation decorator.
+- **Error handling** — Services throw typed `HttpException` subclasses, not `Error`.
+- **Module boundaries** — Shared services exported from their module, not imported directly.
 
-- Flag new warnings and errors
-- Group by severity and category
-- Identify nullable reference warnings -- these often indicate missing null checks
+### Step 3: Report
 
-### Step 3: Antipattern Detection
-
-```
-detect_antipatterns(projectFilter: "affected-project")
-```
-
-- Review each finding against the change context
-- Distinguish pre-existing antipatterns from newly introduced ones
-- Focus review effort on new antipatterns
-
-### Step 4: Blast Radius Analysis
-
-For each significant change, measure its impact:
+Group findings by severity. Every finding includes file, line, and a one-line fix:
 
 ```
-find_references(symbolName: "ModifiedType")
-find_callers(methodName: "ModifiedMethod")
-get_dependency_graph(symbolName: "ModifiedMethod", depth: 2)
-```
+## Critical
+- orders.module.ts:5 — synchronize:true in TypeORM config (production data-loss risk)
+  Fix: remove and use migrations
 
-- Identify all consumers of modified APIs
-- Check if callers handle new error cases or changed return types
-- Flag changes with high blast radius for extra scrutiny
+## Warning
+- orders.service.ts:14 — console.log (use nestjs-pino Logger)
+- order-response.dto.ts:8 — missing @ApiProperty on 'status' field
 
-### Step 5: Architecture Compliance
-
-Verify changes respect architectural boundaries:
-
-```
-get_type_hierarchy(typeName: "NewOrModifiedType")
-find_implementations(interfaceName: "AffectedInterface")
-```
-
-- Domain types must not reference infrastructure
-- Application layer must not bypass domain logic
-- New dependencies should follow existing dependency direction
-- Cross-module communication must go through defined contracts
-
-### Step 6: Manual Review
-
-Review aspects that tools cannot catch:
-- **Business logic correctness** -- Does the code do what it is supposed to?
-- **Edge cases** -- What happens with empty collections, null inputs, concurrent access?
-- **Error messages** -- Are they actionable for the end user?
-- **Naming clarity** -- Do names communicate intent?
-- **Test quality** -- Do tests verify behavior or just exercise code paths?
-
-### Step 7: Produce the Review
-
-Output a structured review with this format:
-
-```markdown
-## Code Review: [Scope Description]
-
-### Summary
-[1-3 sentence overview of the change and overall assessment]
-
-### Critical (must fix before merge)
-- **[Finding title]** -- [file:line]
-  [What is wrong, why it matters, how to fix]
-
-### Warnings (should fix, creates tech debt)
-- **[Finding title]** -- [file:line]
-  [What is wrong, why it matters, how to fix]
-
-### Suggestions (nice to have)
-- **[Finding title]** -- [file:line]
-  [Recommendation and rationale]
-
-### Architecture Compliance
-[PASS/WARN with notes on boundary violations]
-
-### Test Coverage
-[Assessment of test coverage for the changes]
-
-### What's Good
-- [Positive observations -- always include this section]
+## Info
+- old-helper.ts:1 — dead export OldOrderHelper — safe to delete
 ```
 
 ## Example
 
 ```
-User: /code-review the changes in this PR
+User: /code-review
 
-Claude: Scoping review to 7 changed files across 3 projects...
+Running detect_antipatterns...  2 findings
+Running detect_circular_deps... 0 cycles
+Running get_diagnostics...      0 errors
+Running find_dead_code...       1 unused export
+Running get_test_coverage_map.. 82% coverage (2 uncovered branches)
 
-## Code Review: Order Processing Feature
+Manual review complete.
 
-### Summary
-Adds CreateOrder and GetOrder endpoints with EF Core persistence.
-Well-structured VSA feature with good test coverage. Two issues
-need attention before merge.
-
-### Critical
-- **Missing CancellationToken propagation** -- CreateOrder.cs:38
-  The handler calls DbContext.SaveChangesAsync() without passing
-  the CancellationToken. If the client disconnects, the server
-  continues processing. Pass `ct` from the handler parameter.
-
-### Warnings
-- **N+1 query in GetOrder** -- GetOrder.cs:25
-  Loading Order without .Include(o => o.Items) causes a lazy-load
-  per item during serialization. Add eager loading or use a projection.
-
-### Suggestions
-- **Consider sealed class** -- CreateOrderHandler.cs:10
-  Handler classes are not inherited. Mark as sealed for minor
-  performance benefit and clearer intent.
-
-### Architecture Compliance
-PASS -- All changes within Features/Orders/, no layer violations.
-
-### Test Coverage
-Two integration tests cover the happy path. Consider adding tests
-for validation failures and not-found scenarios.
-
-### What's Good
-- Clean separation of command and query features
-- FluentValidation rules cover all edge cases
-- Response DTOs use records with good property names
+## Critical  (0)
+## Warning   (2)  — see above
+## Info      (1)  — dead export
+## Coverage  — orders.service.ts lines 45-52 uncovered
 ```
 
 ## Related
 
-- `/verify` -- Run automated verification pipeline (complements manual review)
-- `/health-check` -- Broader project health assessment beyond a single PR
+- `/de-sloppify` -- Auto-fix mechanical issues before requesting review
+- `/security-scan` -- Security-focused audit
+- `/verify` -- Full build + test + lint pipeline

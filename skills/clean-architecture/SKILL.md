@@ -1,377 +1,316 @@
 ---
 name: clean-architecture
 description: >
-  Clean Architecture for .NET applications. Covers the 4-project layout (Domain,
-  Application, Infrastructure, Api), dependency inversion, use case handlers,
-  domain entities with behavior, and infrastructure as a plugin.
-  Load this skill when building a project with Clean Architecture, discussing
-  layered architecture, dependency inversion, use cases, or when the
-  architecture-advisor recommends Clean Architecture.
+  NestJS Clean Architecture: Domain layer (entities, value objects), Application
+  layer (use cases), Infrastructure layer (TypeORM/Prisma repositories, HTTP adapters).
+  Dependency rule: outer layers depend on inner layers, never the reverse. Load when
+  structuring a project with complex domain logic or when separating business rules
+  from infrastructure concerns.
+  Trigger keywords: clean architecture, use case, domain entity, value object, domain
+  service, repository interface, dependency inversion, DIP, layers, inner, outer.
 ---
-
-# Clean Architecture
 
 ## Core Principles
 
-1. **Dependency inversion is the foundation** — All dependencies point inward. Domain has zero project references. Application references only Domain. Infrastructure references Application and Domain. Api references all but depends on abstractions. The compiler enforces this via project references.
-2. **Domain owns the rules** — Business logic lives in the Domain layer as entity methods, domain services, or specifications. The Domain layer has no knowledge of databases, HTTP, or any framework — only pure C# and .NET primitives.
-3. **Use cases are the unit of work** — Each use case (command or query) is a single class in the Application layer. It orchestrates domain objects, persists through abstractions, and returns a result. No "service" classes with 20 methods.
-4. **Infrastructure is a plugin** — EF Core, external APIs, email senders, file storage — all live in Infrastructure and implement interfaces defined in Application or Domain. Swap implementations without touching business logic.
-5. **The API layer is thin** — Endpoints map HTTP to use cases and use cases to HTTP responses. No business logic in endpoints.
+1. **The dependency rule is absolute.** Domain layer imports nothing from NestJS,
+   TypeORM, or any framework. Application layer knows domain, not infrastructure.
+   Infrastructure knows everything. Rationale: if the domain imports TypeORM, you
+   cannot test domain logic without a database.
+
+2. **Domain entities are plain TypeScript classes.** No decorators, no ORM
+   annotations, no framework imports. Rationale: pure classes are testable without any
+   runtime setup and survive ORM migrations without modification.
+
+3. **Repositories are interfaces in the domain, implementations in infrastructure.**
+   Domain code depends on `OrdersRepository` (interface). TypeORM implementation lives
+   in infrastructure. Rationale: this is the Dependency Inversion Principle —
+   high-level policy does not depend on low-level details.
+
+4. **Use cases are the application's public API.** Each use case class has a single
+   `execute()` method. No use case imports another use case. Rationale: keeps scope
+   small and prevents hidden coupling between application flows.
+
+5. **Controllers are delivery mechanisms only.** Extract HTTP input, call a use case,
+   map result to HTTP response. Zero business logic. Rationale: the same use case must
+   be callable from HTTP, CLI, or a message queue without modification.
 
 ## Patterns
 
-### Project Layout
+### Folder structure
 
 ```
 src/
-  MyApp.Domain/
-    Entities/
-      Order.cs                    # Entity with behavior
-      OrderItem.cs
-    Enums/
-      OrderStatus.cs
-    Exceptions/
-      DomainException.cs          # Base domain exception
-    Interfaces/
-      IOrderRepository.cs         # Only if query needs go beyond DbSet
-    Common/
-      Entity.cs                   # Base entity with Id
-      Result.cs                   # Result pattern type
-
-  MyApp.Application/
-    Common/
-      Behaviors/
-        ValidationBehavior.cs     # Mediator pipeline behavior
-      Interfaces/
-        IAppDbContext.cs           # DbContext abstraction (preferred over repository)
-    Orders/
-      Commands/
-        CreateOrder/
-          CreateOrderCommand.cs
-          CreateOrderHandler.cs
-          CreateOrderValidator.cs
-      Queries/
-        GetOrder/
-          GetOrderQuery.cs
-          GetOrderHandler.cs
-          OrderDto.cs
-
-  MyApp.Infrastructure/
-    Persistence/
-      AppDbContext.cs              # Implements IAppDbContext
-      Configurations/
-        OrderConfiguration.cs
-      Migrations/
-    Services/
-      EmailSender.cs               # Implements IEmailSender from Application
-    DependencyInjection.cs         # AddInfrastructure extension
-
-  MyApp.Api/
-    Endpoints/
-      OrderEndpoints.cs            # Thin, maps HTTP ↔ use cases
-    Program.cs
+  domain/
+    orders/
+      order.entity.ts            ← pure TypeScript class
+      order-item.value-object.ts
+      order-status.ts
+      orders.repository.ts       ← interface + injection token
+  application/
+    orders/
+      use-cases/
+        place-order.use-case.ts
+        cancel-order.use-case.ts
+      dto/
+        place-order.command.ts
+  infrastructure/
+    persistence/
+      orders/
+        typeorm-order.entity.ts  ← ORM entity (separate from domain entity)
+        typeorm-orders.repository.ts
+        orders-persistence.module.ts
+    http/
+      orders/
+        orders.controller.ts
+        orders.module.ts
+  app.module.ts
+  main.ts
 ```
 
-### DbContext Abstraction (Preferred Over Repository)
+### Domain entity — zero framework dependencies
 
-Define a minimal interface in Application; implement in Infrastructure:
+```typescript
+// domain/orders/order.entity.ts
+import { OrderItem } from './order-item.value-object';
 
-```csharp
-// Application/Common/Interfaces/IAppDbContext.cs
-public interface IAppDbContext
-{
-    DbSet<Order> Orders { get; }
-    DbSet<Product> Products { get; }
-    Task<int> SaveChangesAsync(CancellationToken ct = default);
-}
+export type OrderStatus = 'PENDING' | 'CONFIRMED' | 'SHIPPED' | 'CANCELLED';
 
-// Infrastructure/Persistence/AppDbContext.cs
-public class AppDbContext(DbContextOptions<AppDbContext> options)
-    : DbContext(options), IAppDbContext
-{
-    public DbSet<Order> Orders => Set<Order>();
-    public DbSet<Product> Products => Set<Product>();
+export class Order {
+  private readonly _items: OrderItem[];
+  private _status: OrderStatus;
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
-    }
+  constructor(
+    readonly id: string,
+    readonly customerId: string,
+    items: OrderItem[],
+    status: OrderStatus = 'PENDING',
+  ) {
+    if (items.length === 0) throw new Error('Order must have at least one item');
+    this._items = [...items];
+    this._status = status;
+  }
+
+  get items(): readonly OrderItem[] { return this._items; }
+  get status(): OrderStatus { return this._status; }
+  get total(): number {
+    return this._items.reduce((sum, i) => sum + i.price * i.quantity, 0);
+  }
+
+  confirm(): void {
+    if (this._status !== 'PENDING') throw new Error('Only pending orders can be confirmed');
+    this._status = 'CONFIRMED';
+  }
+
+  cancel(): void {
+    if (this._status === 'SHIPPED') throw new Error('Cannot cancel a shipped order');
+    this._status = 'CANCELLED';
+  }
 }
 ```
 
-Why IAppDbContext over IRepository? EF Core's DbSet already IS a repository. Adding another abstraction on top adds indirection without value in most cases.
+### Value Object
 
-### Use Case Handler (Command)
+```typescript
+// domain/orders/order-item.value-object.ts
+export class OrderItem {
+  constructor(
+    readonly productId: string,
+    readonly quantity: number,
+    readonly price: number,
+  ) {
+    if (quantity < 1) throw new Error('Quantity must be at least 1');
+    if (price < 0) throw new Error('Price cannot be negative');
+  }
 
-```csharp
-// Application/Orders/Commands/CreateOrder/CreateOrderCommand.cs
-public record CreateOrderCommand(
-    string CustomerId,
-    List<OrderItemDto> Items) : IRequest<Result<Guid>>;
-
-public record OrderItemDto(string ProductId, int Quantity, decimal UnitPrice);
-
-// Application/Orders/Commands/CreateOrder/CreateOrderHandler.cs — uses Mediator (source-generated, MIT)
-internal sealed class CreateOrderHandler(
-    IAppDbContext db,
-    TimeProvider clock) : IRequestHandler<CreateOrderCommand, Result<Guid>>
-{
-    public async ValueTask<Result<Guid>> Handle(CreateOrderCommand request, CancellationToken ct)
-    {
-        var order = Order.Create(
-            request.CustomerId,
-            request.Items.Select(i => new OrderItem(i.ProductId, i.Quantity, i.UnitPrice)),
-            clock.GetUtcNow());
-
-        db.Orders.Add(order);
-        await db.SaveChangesAsync(ct);
-
-        return Result.Success(order.Id);
-    }
-}
-
-// Application/Orders/Commands/CreateOrder/CreateOrderValidator.cs
-public class CreateOrderValidator : AbstractValidator<CreateOrderCommand>
-{
-    public CreateOrderValidator()
-    {
-        RuleFor(x => x.CustomerId).NotEmpty();
-        RuleFor(x => x.Items).NotEmpty();
-        RuleForEach(x => x.Items).ChildRules(item =>
-        {
-            item.RuleFor(x => x.ProductId).NotEmpty();
-            item.RuleFor(x => x.Quantity).GreaterThan(0);
-            item.RuleFor(x => x.UnitPrice).GreaterThan(0);
-        });
-    }
+  equals(other: OrderItem): boolean {
+    return this.productId === other.productId &&
+      this.quantity === other.quantity &&
+      this.price === other.price;
+  }
 }
 ```
 
-### Use Case Handler (Query)
+### Repository interface with injection token
 
-```csharp
-// Application/Orders/Queries/GetOrder/GetOrderQuery.cs
-public record GetOrderQuery(Guid OrderId) : IRequest<Result<OrderDto>>;
+```typescript
+// domain/orders/orders.repository.ts
+import type { Order } from './order.entity';
 
-public record OrderDto(Guid Id, string CustomerId, decimal Total, string Status, DateTimeOffset CreatedAt);
+export interface OrdersRepository {
+  findById(id: string): Promise<Order | null>;
+  findByCustomerId(customerId: string): Promise<Order[]>;
+  save(order: Order): Promise<void>;
+  delete(id: string): Promise<void>;
+}
 
-// Application/Orders/Queries/GetOrder/GetOrderHandler.cs
-internal sealed class GetOrderHandler(IAppDbContext db) : IRequestHandler<GetOrderQuery, Result<OrderDto>>
-{
-    public async ValueTask<Result<OrderDto>> Handle(GetOrderQuery request, CancellationToken ct)
-    {
-        var order = await db.Orders
-            .Where(o => o.Id == request.OrderId)
-            .Select(o => new OrderDto(o.Id, o.CustomerId, o.Total, o.Status.ToString(), o.CreatedAt))
-            .FirstOrDefaultAsync(ct);
+export const ORDERS_REPOSITORY = Symbol('OrdersRepository');
+```
 
-        return order is not null
-            ? Result.Success(order)
-            : Result.Failure<OrderDto>("Order not found");
-    }
+### Use case
+
+```typescript
+// application/orders/use-cases/place-order.use-case.ts
+import { Inject, Injectable } from '@nestjs/common';
+import { ORDERS_REPOSITORY, OrdersRepository } from '../../../domain/orders/orders.repository';
+import { Order } from '../../../domain/orders/order.entity';
+import { OrderItem } from '../../../domain/orders/order-item.value-object';
+import type { PlaceOrderCommand } from '../dto/place-order.command';
+
+@Injectable()
+export class PlaceOrderUseCase {
+  constructor(
+    @Inject(ORDERS_REPOSITORY)
+    private readonly ordersRepo: OrdersRepository,
+  ) {}
+
+  async execute(command: PlaceOrderCommand): Promise<string> {
+    const items = command.items.map(
+      i => new OrderItem(i.productId, i.quantity, i.price),
+    );
+    const order = new Order(crypto.randomUUID(), command.customerId, items);
+    await this.ordersRepo.save(order);
+    return order.id;
+  }
 }
 ```
 
-### Domain Entity with Behavior
+### TypeORM repository implementing the domain interface
 
-```csharp
-// Domain/Entities/Order.cs
-public class Order : Entity
-{
-    private readonly List<OrderItem> _items = [];
+```typescript
+// infrastructure/persistence/orders/typeorm-orders.repository.ts
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { OrdersRepository } from '../../../domain/orders/orders.repository';
+import { Order } from '../../../domain/orders/order.entity';
+import { OrderItem } from '../../../domain/orders/order-item.value-object';
+import { TypeOrmOrderEntity } from './typeorm-order.entity';
 
-    private Order() { } // EF Core
+@Injectable()
+export class TypeOrmOrdersRepository implements OrdersRepository {
+  constructor(
+    @InjectRepository(TypeOrmOrderEntity)
+    private readonly repo: Repository<TypeOrmOrderEntity>,
+  ) {}
 
-    public string CustomerId { get; private set; } = null!;
-    public OrderStatus Status { get; private set; }
-    public decimal Total { get; private set; }
-    public DateTimeOffset CreatedAt { get; private set; }
-    public IReadOnlyList<OrderItem> Items => _items.AsReadOnly();
+  async findById(id: string): Promise<Order | null> {
+    const row = await this.repo.findOne({ where: { id }, relations: { items: true } });
+    if (!row) return null;
+    return new Order(
+      row.id,
+      row.customerId,
+      row.items.map(i => new OrderItem(i.productId, i.quantity, i.price)),
+      row.status,
+    );
+  }
 
-    public static Order Create(string customerId, IEnumerable<OrderItem> items, DateTimeOffset now)
-    {
-        var order = new Order
-        {
-            Id = Guid.CreateVersion7(),
-            CustomerId = customerId,
-            Status = OrderStatus.Pending,
-            CreatedAt = now
-        };
+  async save(order: Order): Promise<void> {
+    await this.repo.save({
+      id: order.id,
+      customerId: order.customerId,
+      status: order.status,
+      total: order.total,
+    });
+  }
 
-        foreach (var item in items)
-            order.AddItem(item);
+  async findByCustomerId(customerId: string): Promise<Order[]> {
+    const rows = await this.repo.find({ where: { customerId }, relations: { items: true } });
+    return rows.map(row => new Order(
+      row.id, row.customerId,
+      row.items.map(i => new OrderItem(i.productId, i.quantity, i.price)),
+      row.status,
+    ));
+  }
 
-        return order;
-    }
-
-    public void AddItem(OrderItem item)
-    {
-        _items.Add(item);
-        Total = _items.Sum(i => i.Quantity * i.UnitPrice);
-    }
-
-    public Result Cancel()
-    {
-        if (Status is not OrderStatus.Pending)
-            return Result.Failure("Only pending orders can be cancelled");
-
-        Status = OrderStatus.Cancelled;
-        return Result.Success();
-    }
+  async delete(id: string): Promise<void> {
+    await this.repo.delete(id);
+  }
 }
 ```
 
-### Thin Endpoint Wiring (IEndpointGroup Auto-Discovery)
+### NestJS module — binds interface token to implementation
 
-Every endpoint group implements `IEndpointGroup` and is auto-discovered via `app.MapEndpoints()`. Program.cs never changes when adding new endpoints. See the **minimal-api** skill for the full `IEndpointGroup` interface and `EndpointExtensions` setup.
+```typescript
+// infrastructure/persistence/orders/orders-persistence.module.ts
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ORDERS_REPOSITORY } from '../../../domain/orders/orders.repository';
+import { TypeOrmOrdersRepository } from './typeorm-orders.repository';
+import { TypeOrmOrderEntity } from './typeorm-order.entity';
 
-```csharp
-// Api/Endpoints/OrderEndpoints.cs
-public sealed class OrderEndpoints : IEndpointGroup
-{
-    public void Map(IEndpointRouteBuilder app)
-    {
-        var group = app.MapGroup("/api/orders").WithTags("Orders");
-
-        group.MapPost("/", CreateOrder)
-            .WithName("CreateOrder");
-
-        group.MapGet("/{id:guid}", GetOrder)
-            .WithName("GetOrder");
-
-        group.MapGet("/", ListOrders)
-            .WithName("ListOrders");
-    }
-
-    private static async Task<IResult> CreateOrder(
-        CreateOrderCommand command, ISender sender, CancellationToken ct)
-    {
-        var result = await sender.Send(command, ct);
-        return result.IsSuccess
-            ? TypedResults.Created($"/api/orders/{result.Value}", result.Value)
-            : result.ToProblemDetails();
-    }
-
-    private static async Task<IResult> GetOrder(
-        Guid id, ISender sender, CancellationToken ct)
-    {
-        var result = await sender.Send(new GetOrderQuery(id), ct);
-        return result.IsSuccess
-            ? TypedResults.Ok(result.Value)
-            : TypedResults.NotFound();
-    }
-
-    private static async Task<IResult> ListOrders(
-        [AsParameters] ListOrdersQuery query, ISender sender, CancellationToken ct)
-    {
-        var result = await sender.Send(query, ct);
-        return TypedResults.Ok(result);
-    }
-}
-```
-
-### Infrastructure DI Registration
-
-```csharp
-// Infrastructure/DependencyInjection.cs
-public static class DependencyInjection
-{
-    public static IServiceCollection AddInfrastructure(
-        this IServiceCollection services,
-        IConfiguration config)
-    {
-        services.AddDbContext<AppDbContext>(options =>
-            options.UseNpgsql(config.GetConnectionString("DefaultConnection")));
-
-        services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
-
-        return services;
-    }
-}
+@Module({
+  imports: [TypeOrmModule.forFeature([TypeOrmOrderEntity])],
+  providers: [
+    { provide: ORDERS_REPOSITORY, useClass: TypeOrmOrdersRepository },
+  ],
+  exports: [ORDERS_REPOSITORY],
+})
+export class OrdersPersistenceModule {}
 ```
 
 ## Anti-patterns
 
-### Anemic Domain Model
+### Framework imports in the domain layer
 
-```csharp
-// BAD — entity is just a data bag, all logic in handler
-public class Order
-{
-    public Guid Id { get; set; }
-    public string CustomerId { get; set; } = null!;
-    public decimal Total { get; set; }
-    public List<OrderItem> Items { get; set; } = [];
+```typescript
+// BAD — domain entity coupled to TypeORM; cannot test without database
+import { Entity, Column } from 'typeorm';
+import { Injectable } from '@nestjs/common';
+
+@Entity()
+@Injectable()
+export class Order { ... }
+
+// GOOD — pure TypeScript, zero framework imports
+export class Order {
+  constructor(readonly id: string, readonly customerId: string) {}
+}
+```
+
+### Business logic in the controller
+
+```typescript
+// BAD — domain rules in the HTTP adapter
+@Post()
+async create(@Body() dto: CreateOrderDto) {
+  if (dto.items.length === 0) throw new BadRequestException('No items');
+  const total = dto.items.reduce((s, i) => s + i.price, 0);
+  return this.service.create({ ...dto, total });
 }
 
-// Handler sets everything directly
-order.Total = order.Items.Sum(i => i.Quantity * i.UnitPrice);
-order.Status = OrderStatus.Pending;
-
-// GOOD — entity encapsulates its own rules (see Domain Entity pattern above)
-var order = Order.Create(customerId, items, clock.GetUtcNow());
+// GOOD — controller delegates; domain entity enforces invariants
+@Post()
+create(@Body() dto: PlaceOrderCommand) {
+  return this.placeOrderUseCase.execute(dto);
+}
 ```
 
-### DbContext in Domain Layer
+### Use case importing another use case
 
-```csharp
-// BAD — Domain references EF Core
-// Domain/Services/OrderService.cs
-public class OrderService(AppDbContext db) { } // Domain depends on Infrastructure!
+```typescript
+// BAD — hidden coupling, use cases should be independent
+@Injectable()
+export class CheckoutUseCase {
+  constructor(private readonly placeOrder: PlaceOrderUseCase) {} // wrong
+}
 
-// GOOD — Domain defines interfaces, Infrastructure implements
-// Domain/Interfaces/IOrderRepository.cs (only if you need query abstraction beyond DbSet)
-// Application/Common/Interfaces/IAppDbContext.cs (preferred)
-```
-
-### Fat Endpoints
-
-```csharp
-// BAD — business logic in the endpoint
-app.MapPost("/orders", async (CreateOrderRequest req, AppDbContext db) =>
-{
-    var order = new Order { CustomerId = req.CustomerId };
-    foreach (var item in req.Items)
-    {
-        order.Items.Add(new OrderItem { ProductId = item.ProductId, Quantity = item.Quantity });
-    }
-    order.Total = order.Items.Sum(i => i.Quantity * i.UnitPrice);
-    db.Orders.Add(order);
-    await db.SaveChangesAsync();
-    return TypedResults.Created($"/orders/{order.Id}", order);
-});
-
-// GOOD — endpoint delegates to a use case
-app.MapPost("/orders", async (CreateOrderCommand command, ISender sender, CancellationToken ct) =>
-{
-    var result = await sender.Send(command, ct);
-    return result.IsSuccess
-        ? TypedResults.Created($"/orders/{result.Value}", result.Value)
-        : result.ToProblemDetails();
-});
-```
-
-### Repository for Every Entity
-
-```csharp
-// BAD — repository per entity duplicates DbSet functionality
-public interface IOrderRepository { Task<Order?> GetByIdAsync(Guid id); }
-public interface IProductRepository { Task<Product?> GetByIdAsync(Guid id); }
-public interface ICustomerRepository { Task<Customer?> GetByIdAsync(Guid id); }
-
-// GOOD — use IAppDbContext with DbSet<T> directly
-// Only create a repository interface when you have complex query logic
-// that you want to test in isolation or reuse across multiple use cases
+// GOOD — share domain services or repositories via injection tokens
+@Injectable()
+export class CheckoutUseCase {
+  constructor(
+    @Inject(ORDERS_REPOSITORY) private readonly ordersRepo: OrdersRepository,
+    @Inject(PAYMENTS_REPOSITORY) private readonly paymentsRepo: PaymentsRepository,
+  ) {}
+}
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| When to use CA over VSA | Medium+ domain complexity, long-lived system, team familiar with layers |
-| When to add a Domain layer | Business rules involve invariants across entity groups |
-| IAppDbContext vs repositories | Prefer IAppDbContext; add repository only for complex reusable queries |
-| Mediator vs raw handlers in CA | Mediator for pipeline behaviors (validation, logging); raw handlers for simplicity |
-| When to add Domain events | When side effects (notifications, audit) should be decoupled from the main flow |
-| Evolving from VSA to CA | When handlers start needing shared domain logic that does not belong in Common/ |
+|---|---|
+| Simple CRUD, no business rules | Feature Modules (skip Clean Architecture overhead) |
+| Complex domain invariants | Domain entity with private state + enforce in methods |
+| Swap ORM later | Repository interface in domain, bind implementation via DI token |
+| Test domain logic without DB | Mock `OrdersRepository` via injection token |
+| Multiple delivery channels (HTTP + CLI) | Same use case, different controllers |
+| Read-only queries | Query directly from infrastructure; no use case needed |

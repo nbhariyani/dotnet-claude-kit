@@ -1,66 +1,61 @@
 ---
 name: autonomous-loops
 description: >
-  Autonomous iteration loops for .NET development: build-fix, test-fix, refactor,
-  and scaffold loops. Each loop has bounded iterations, progress detection, and
-  fail-safe guards that prevent infinite retries and wasted tokens. Load this skill
-  when Claude needs to fix build errors, fix failing tests, perform multi-step
-  refactoring, scaffold a new feature, or when the user says "fix the build",
-  "make the tests pass", "refactor this", "scaffold", "generate and verify",
-  "keep going until it works", "autonomous", or "loop".
+  Autonomous iteration loops for NestJS and TypeScript development: build-fix,
+  test-fix, refactor, and scaffold loops. Each loop has bounded iterations,
+  progress detection, and fail-safe guards that prevent infinite retries and
+  wasted tokens. Load this skill when Claude needs to fix build errors, fix
+  failing tests, perform multi-step refactoring, scaffold a new feature, or
+  when the user says "fix the build", "make the tests pass", "refactor this",
+  "scaffold", "generate and verify", "keep going until it works", "autonomous",
+  or "loop".
 ---
 
 # Autonomous Loops
 
 ## Core Principles
 
-1. **Bounded iteration, always** — Every loop has a maximum iteration count. Default is 5, hard cap is 10. No loop runs forever. If 5 iterations cannot solve a build error, the problem needs human judgment, not a 6th attempt at the same approach.
-
-2. **Progress tracking or exit** — Each iteration must make measurable progress: fewer errors, fewer failing tests, fewer warnings. If an iteration produces the same error count as the previous one, the loop exits with a STUCK status. Retrying without progress is token waste.
-
-3. **Fail-safe guards are non-negotiable** — Loops exit on: max iterations reached, no progress detected, critical error encountered, more errors introduced than fixed, or user interruption. These guards exist to prevent the most common failure mode: Claude stubbornly retrying the same broken approach 20 times.
-
-4. **Transparency at every iteration** — Report what changed and why after each iteration. The user should be able to follow the loop's reasoning without reading every file. "Iteration 3: fixed CS0246 by adding `using System.Text.Json`, 2 errors remain" is transparent. Silently modifying files is not.
-
-5. **Atomicity per iteration** — Each iteration's changes should leave the codebase in a valid state (or at least no worse than before). Never make partial changes that depend on a future iteration succeeding. If iteration 3 fails, the code should still be in the state that iteration 2 left it in.
+1. **Bounded iteration, always** - Every loop has a maximum iteration count. Default is 5, hard cap is 10. If 5 iterations cannot solve a build or test failure, the problem needs a different approach, not more repetition.
+2. **Progress tracking or exit** - Each iteration must make measurable progress: fewer TypeScript errors, fewer failing tests, fewer warnings, or advancement to the next verification phase.
+3. **Fail-safe guards are non-negotiable** - Exit on max iterations reached, no progress detected, critical infrastructure failure, or a fix introducing more breakage than it removes.
+4. **Transparency at every iteration** - Report what changed and why after each iteration. The user should be able to follow the loop without reading every modified file.
+5. **Atomicity per iteration** - Each iteration should leave the codebase in a valid or improved state. Do not leave half-finished changes that depend on a later iteration succeeding.
 
 ## Patterns
 
 ### Build-Fix Loop
 
-The most common loop. Fix compilation errors iteratively until `dotnet build` succeeds.
+The most common loop. Fix TypeScript and NestJS build errors until the project passes verification.
 
-```
+```text
 BUILD-FIX LOOP:
   max_iterations = 5
   previous_errors = []
 
   for iteration in 1..max_iterations:
-    result = dotnet build [project/solution]
+    diagnostics = get_diagnostics(project)
 
-    if result.exit_code == 0:
-      report "BUILD PASS after {iteration} iteration(s)"
-      return PASS
+    if diagnostics.error_count == 0:
+      result = npm run build
+      if result.exit_code == 0:
+        report "BUILD PASS after {iteration} iteration(s)"
+        return PASS
 
-    errors = parse_errors(result.output)
+    errors = normalize(diagnostics.errors or parse_errors(build_output))
 
     if errors == previous_errors:
-      report "STUCK — same {len(errors)} error(s) after fix attempt"
-      report "Errors: {errors}"
+      report "STUCK - same {len(errors)} error(s) after fix attempt"
       return STUCK
 
-    if len(errors) > len(previous_errors) and iteration > 1:
-      report "REGRESSING — {len(errors)} errors, up from {len(previous_errors)}"
-      report "Last fix introduced new errors. Reverting iteration {iteration}."
-      revert_last_changes()
+    if iteration > 1 and len(errors) > len(previous_errors):
+      report "REGRESSING - {len(errors)} errors, up from {len(previous_errors)}"
       return REGRESSION
 
     report "Iteration {iteration}: {len(errors)} error(s) found"
     for error in errors:
-      category = categorize(error)
-      fix = determine_fix(error, category)
+      fix = determine_fix(error)
       apply(fix)
-      report "  Fixed {error.code}: {error.message} → {fix.description}"
+      report "  Fixed {error.code}: {fix.description}"
 
     previous_errors = errors
 
@@ -68,33 +63,32 @@ BUILD-FIX LOOP:
   return FAIL
 ```
 
-**Error Categories and Fix Strategies:**
+**Common error categories**
 
-```
-CATEGORY               EXAMPLE CODE    FIX STRATEGY
-Missing using          CS0246          Add the correct using directive
-Missing reference      CS0246          Add NuGet package or project reference
-Type mismatch          CS0029          Check expected type, cast or convert
-API change             CS0117          Check new API signature, update call
-Nullable warning       CS8600-CS8604   Add null check, use ?. or ?? operator
-Ambiguous reference    CS0104          Add full namespace qualifier
-Missing member         CS1061          Check spelling, verify type has the member
-Obsolete API           CS0618          Replace with recommended alternative
-Missing implementation CS0535          Implement missing interface members
-Syntax error           CS1002-CS1003   Fix syntax based on error context
+```text
+CATEGORY                  EXAMPLE          FIX STRATEGY
+Missing import            TS2304/TS2307    Add correct import or fix path alias
+Type mismatch             TS2322           Align DTO/entity/service return types
+Missing property          TS2339           Fix wrong shape, mapper, or contract
+Wrong method signature    TS2554/TS2559    Update call site to current API
+Decorator metadata issue  Nest runtime     Fix module wiring, provider export, DTO decorator
+Config typing issue       TS2345           Validate env parsing and ConfigService usage
+Unused symbol             TS6133           Remove dead code or use the value intentionally
+Null/undefined issue      TS2532/TS18048   Add guard, narrow type, or make contract explicit
+Syntax error              TS1005           Fix syntax before chasing downstream errors
 ```
 
 ### Test-Fix Loop
 
-Fix failing tests iteratively. Critically, this loop must determine whether the bug is in the test or in the production code.
+Fix failing tests iteratively. Always decide whether the bug is in the test, the setup, or the production code.
 
-```
+```text
 TEST-FIX LOOP:
   max_iterations = 5
   previous_failures = []
 
   for iteration in 1..max_iterations:
-    result = dotnet test [project/solution] --no-build
+    result = npm test -- --runInBand
 
     if result.all_passed:
       report "TESTS PASS after {iteration} iteration(s)"
@@ -103,24 +97,18 @@ TEST-FIX LOOP:
     failures = parse_failures(result.output)
 
     if failures == previous_failures:
-      report "STUCK — same {len(failures)} failure(s) after fix attempt"
+      report "STUCK - same {len(failures)} failure(s) after fix attempt"
       return STUCK
 
     report "Iteration {iteration}: {len(failures)} failure(s)"
     for failure in failures:
-      # CRITICAL: diagnose before fixing
       diagnosis = diagnose(failure)
-      report "  {failure.test_name}: {failure.message}"
-      report "  Diagnosis: {diagnosis.root_cause}"
-      report "  Fix target: {diagnosis.fix_in}"  # "test" or "production"
+      report "  {failure.test_name}: {diagnosis.root_cause}"
 
       if diagnosis.fix_in == "test":
-        fix = fix_test(failure, diagnosis)
+        apply(fix_test(failure, diagnosis))
       else:
-        fix = fix_production_code(failure, diagnosis)
-
-      apply(fix)
-      report "  Applied: {fix.description}"
+        apply(fix_production_code(failure, diagnosis))
 
     previous_failures = failures
 
@@ -128,266 +116,204 @@ TEST-FIX LOOP:
   return FAIL
 ```
 
-**Diagnosis Protocol:**
+**Diagnosis protocol**
 
-```
-DIAGNOSING A TEST FAILURE:
-1. Read the test code — understand the assertion and setup
-2. Read the production code — understand the actual behavior
-3. Determine root cause:
-   a. Test expects wrong value → fix the test
-   b. Production code has a bug → fix the production code
-   c. Test setup is incomplete → fix the test setup
-   d. API contract changed → update test to match new contract
-4. NEVER fix a test by weakening the assertion without understanding why
-   BAD:  Assert.Equal(expected, actual) → Assert.NotNull(actual)
-   GOOD: Assert.Equal(expected, actual) → fix production code to return expected
+```text
+1. Read the failing test and understand the assertion.
+2. Read only the production code needed to understand the behavior.
+3. Decide the root cause:
+   a. Test expectation is wrong
+   b. Production code is wrong
+   c. Test setup/module wiring is incomplete
+   d. Contract changed and test needs an intentional update
+4. Never weaken assertions just to get green tests.
 ```
 
 ### Refactor Loop
 
-Multi-step refactoring with verification at each step.
+Multi-step refactoring with verification after each target.
 
-```
+```text
 REFACTOR LOOP:
-  targets = identify_refactoring_targets()  # via MCP tools
+  targets = identify_refactoring_targets()
   max_iterations = min(len(targets), 10)
 
   for iteration, target in enumerate(targets, 1):
-    if iteration > max_iterations:
-      report "MAX TARGETS reached, {len(targets) - iteration} remaining"
-      return PARTIAL
-
     report "Refactoring {iteration}/{len(targets)}: {target.description}"
-
-    # 1. Apply the refactoring
     apply_refactoring(target)
 
-    # 2. Verify it builds
-    build_result = build_fix_loop(max_iterations=3)  # nested, smaller budget
+    build_result = build_fix_loop(max_iterations=3)
     if build_result != PASS:
-      report "Build failed after refactoring {target}. Reverting."
-      revert_changes()
+      report "Build failed after refactoring {target}. Stop and reassess."
       return FAIL
 
-    # 3. Verify tests pass
-    test_result = test_fix_loop(max_iterations=3)  # nested, smaller budget
+    test_result = test_fix_loop(max_iterations=3)
     if test_result != PASS:
-      report "Tests failed after refactoring {target}. Reverting."
-      revert_changes()
+      report "Tests failed after refactoring {target}. Stop and reassess."
       return FAIL
 
-    # 4. Check diagnostics for new warnings
-    diagnostics = get_diagnostics()
-    if diagnostics.new_warnings > 0:
-      report "New warnings introduced. Fixing..."
-      fix_warnings(diagnostics.new_warnings)
-
-    report "Refactoring {iteration} complete. Build: PASS, Tests: PASS"
+    diagnostics = get_diagnostics(project)
+    if diagnostics.new_errors > 0:
+      report "New diagnostics introduced. Fixing before continuing."
+      return FAIL
 
   return PASS
 ```
 
 ### Scaffold Loop
 
-Generate a new feature end-to-end and verify everything compiles and tests pass.
+Generate a new NestJS feature end-to-end and verify it integrates cleanly.
 
-```
+```text
 SCAFFOLD LOOP:
   1. GENERATE source files
-     → Create feature file (endpoint + handler + validator)
-     → Create EF configuration if needed
-     → Create DTOs/contracts
+     -> Create module, controller, service, DTOs, pipes/guards/interceptors as needed
+     -> Wire imports/exports in the correct NestJS module
+     -> Add ORM artifacts if the feature touches persistence
 
   2. BUILD VERIFICATION
-     → Run build-fix loop (max 5 iterations)
-     → If FAIL: report and stop — generated code has fundamental issues
+     -> Run get_diagnostics first
+     -> Run build-fix loop (max 5 iterations)
 
-  3. GENERATE test files
-     → Create unit tests for handler logic
-     → Create integration tests for endpoint
-     → Match project's test conventions (via instinct-system)
+  3. GENERATE tests
+     -> Create unit tests for service logic
+     -> Create controller/e2e tests with Jest + SuperTest if the project uses them
+     -> Match the repo's testing conventions
 
   4. TEST VERIFICATION
-     → Run test-fix loop (max 5 iterations)
-     → If FAIL: report which tests fail and why
+     -> Run test-fix loop (max 5 iterations)
 
   5. QUALITY CHECK
-     → Run get_diagnostics — zero new warnings
-     → Run detect_antipatterns — zero new anti-patterns
-     → Verify naming matches project conventions
-
-  FINAL REPORT:
-  "Scaffold complete:
-   - Source files: [list with paths]
-   - Test files: [list with paths]
-   - Build: PASS
-   - Tests: [N/N] passing
-   - Warnings: 0 new
-   - Anti-patterns: 0 new"
+     -> get_diagnostics: zero new errors
+     -> detect_antipatterns: zero new critical antipatterns
+     -> detect_circular_deps: no new cycles
+     -> Verify naming and folder placement match project conventions
 ```
 
 ### Progress Detection
 
-How to measure whether a loop iteration made progress:
-
-```
+```text
 PROGRESS METRICS:
   Build-Fix:    error_count[N] < error_count[N-1]
   Test-Fix:     failure_count[N] < failure_count[N-1]
-  Refactor:     target_count[N] < target_count[N-1]
-  Scaffold:     phase advances (generate → build → test → verify)
+  Refactor:     remaining_targets[N] < remaining_targets[N-1]
+  Scaffold:     phase advances from generate -> build -> test -> verify
 
 STUCK DETECTION:
-  Same errors/failures after a fix attempt → STUCK
-  Error count oscillates (3 → 2 → 3 → 2) → STUCK (after 2 oscillations)
-  Fix introduces errors in previously passing code → REGRESSION
-
-NO-PROGRESS RESPONSE:
-  1. Report the stuck state clearly
-  2. List the errors/failures that could not be fixed
-  3. Suggest what a human should investigate
-  4. Do NOT retry the same approach
+  Same diagnostics after a fix attempt -> STUCK
+  Same failing tests after a fix attempt -> STUCK
+  Errors oscillate without net improvement -> STUCK
+  Fix introduces new failures in previously healthy code -> REGRESSION
 ```
 
 ### Emergency Exit Conditions
 
-Conditions that cause immediate loop termination:
-
-```
+```text
 EMERGENCY EXITS:
-  1. MORE ERRORS THAN BEFORE — an iteration introduced more errors than it fixed
-     → Revert the iteration's changes
-     → Report: "Fix attempt introduced {N} new errors. Reverted."
+  1. More errors than before
+     -> Stop and report regression
 
-  2. CRITICAL ERROR — error indicates a fundamental problem (wrong SDK, missing
-     project file, corrupted solution)
-     → Stop immediately
-     → Report: "Critical error detected: {description}. Human intervention needed."
+  2. Critical environment failure
+     -> Missing package manager, broken tsconfig, test runner crash, DB container unavailable
 
-  3. CASCADING FAILURES — fixing one error causes 3+ new errors repeatedly
-     → Stop after 2 cascades
-     → Report: "Cascading failure pattern detected. The fix approach is wrong."
+  3. Cascading failures
+     -> One fix repeatedly creates several new failures
 
-  4. TEST INFRASTRUCTURE FAILURE — test runner itself fails (not test assertions)
-     → Stop immediately
-     → Report: "Test infrastructure error: {description}. Check test setup."
+  4. Infrastructure failure
+     -> Jest cannot boot, Nest testing module cannot compile, migrations cannot connect
 
-  5. USER INTERRUPTION — user sends any message during the loop
-     → Complete current iteration
-     → Report progress so far
-     → Ask how to proceed
+  5. User interruption
+     -> Finish the current small unit of work, report status, and wait
 ```
 
 ### Loop Nesting and Reporting
 
-When loops call other loops (e.g., refactor loop calls build-fix loop):
-
-```
+```text
 NESTING RULES:
-  - Nested loops get a SMALLER budget (parent max 5 → nested max 3)
-  - Maximum nesting depth: 2 (Refactor → Build-Fix → no further)
-  - Nested loop failure = parent loop iteration failure (revert the target)
-  - Total iteration budget across all nesting: 15
+  - Nested loops get a smaller budget (parent 5 -> child 3)
+  - Maximum nesting depth: 2
+  - Nested loop failure means the parent loop pauses and reports
+  - Total iteration budget across nested loops should stay bounded
 
-ITERATION REPORT FORMAT:
-  [Loop Type] Iteration {N}/{MAX}: {error/failure count}
-  → {file}: {what changed and why}
-  → Result: {new count} | Status: {CONTINUE/PASS/STUCK/FAIL}
+REPORT FORMAT:
+  [Loop Type] Iteration {N}/{MAX}: {count}
+  -> {file}: {what changed and why}
+  -> Result: {new count} | Status: {CONTINUE/PASS/STUCK/FAIL}
 ```
 
 ## Anti-patterns
 
 ### Unbounded Loops
 
-```
-# BAD — no iteration limit
+```text
+BAD:
 "Keep fixing build errors until it compiles"
-*Claude tries 47 iterations, burns through context window,
- keeps retrying the same broken approach*
 
-# GOOD — explicit bounds with progress checks
+GOOD:
 build_fix_loop(max_iterations=5)
-*After 5 iterations or zero progress, stops and reports*
 ```
 
 ### Retrying the Same Fix
 
-```
-# BAD — applying the same fix that failed
-Iteration 1: Add `using System.Linq;` → CS0246 persists
-Iteration 2: Add `using System.Linq;` → CS0246 persists
-Iteration 3: Add `using System.Linq;` → CS0246 persists
+```text
+BAD:
+Iteration 1: add an import -> TS2307 persists
+Iteration 2: add the same import -> TS2307 persists
 
-# GOOD — detect no progress, try a different approach or exit
-Iteration 1: Add `using System.Linq;` → CS0246 persists
-Iteration 2: STUCK — same error after fix.
-  "CS0246 persists after adding System.Linq. The type may be in a
-   different namespace or require a NuGet package. Checking..."
-  → Search for the type using find_symbol
+GOOD:
+Iteration 1: add import -> TS2307 persists
+Iteration 2: STUCK - same error after fix.
+  "The symbol may come from a different module, alias, or package export."
 ```
 
 ### Fixing by Deletion
 
-```
-# BAD — making code compile by removing functionality
-Error: CS0246 'OrderValidator' not found
-Fix: Delete all validation code
-*Builds successfully! ...but the feature is broken*
+```text
+BAD:
+Error: provider not found
+Fix: delete the guard/interceptor/module wiring
 
-# GOOD — fix the root cause
-Error: CS0246 'OrderValidator' not found
-Fix: Add missing reference to Validation project, or create the missing class
-*Builds successfully with all functionality intact*
+GOOD:
+Error: provider not found
+Fix: register the provider in the module or export it from the owning module
 ```
 
 ### Silent Loops
 
-```
-# BAD — loop runs silently, user sees nothing for 2 minutes
-*...silence...*
-"Done! Fixed 7 build errors."
-*User has no idea what changed or why*
+```text
+BAD:
+...silence...
+"Done! Fixed 7 issues."
 
-# GOOD — transparent reporting per iteration
-"Iteration 1/5: 4 errors found
-  Fixed CS0246 in OrderHandler.cs → added using FluentValidation
-  Fixed CS0029 in OrderResponse.cs → changed return type to match
-  2 errors remain.
- Iteration 2/5: 2 errors found
-  Fixed CS1061 in OrderEndpoint.cs → updated method name to CreateAsync
-  Fixed CS8600 in OrderHandler.cs → added null check
-  0 errors remain.
- BUILD PASS after 2 iterations."
+GOOD:
+"Iteration 1/5: 4 diagnostics found
+  Fixed users.service.ts -> aligned return type with DTO
+  Fixed users.module.ts -> exported provider needed by auth module
+  2 diagnostics remain."
 ```
 
 ### Over-Aggressive Test Fixing
 
-```
-# BAD — weakening assertions to make tests pass
-Assert.Equal(200, response.StatusCode)  // fails with 404
-→ Changed to: Assert.NotNull(response)  // passes but hides the bug
+```text
+BAD:
+expect(response.status).toBe(201) -> changed to expect(response).toBeDefined()
 
-# GOOD — diagnose the failure, fix the right code
-Assert.Equal(200, response.StatusCode)  // fails with 404
-→ Diagnosis: endpoint routing is wrong, missing MapGet registration
-→ Fix: add endpoint registration in OrderModule.cs
-→ Test passes with correct 200 status
+GOOD:
+expect(response.status).toBe(201)
+-> Diagnosis: controller route not registered in testing module
+-> Fix: import the correct Nest module and keep the original assertion
 ```
 
 ## Decision Guide
 
 | Scenario | Loop Type | Max Iterations | Notes |
-|----------|-----------|---------------|-------|
-| Build fails after code changes | Build-Fix | 5 | Categorize errors, fix systematically |
+|----------|-----------|----------------|-------|
+| TypeScript build fails after changes | Build-Fix | 5 | Prefer `get_diagnostics` before `npm run build` |
 | Tests fail after code changes | Test-Fix | 5 | Diagnose test vs production bug first |
-| Tests fail after build-fix loop | Test-Fix | 3 | Smaller budget — build-fix may have introduced issues |
-| Multi-file refactoring | Refactor | 10 (or target count) | Verify build+tests after each target |
-| Generating a new feature | Scaffold | 1 (phases, not iterations) | Build-fix and test-fix nested inside |
-| Same error persists after fix | Exit with STUCK | N/A | Report error, suggest human investigation |
-| Fix introduces more errors | Emergency exit | N/A | Revert changes, report regression |
-| Nested loop needed | Use smaller budget | Parent - 2 | Max nesting depth: 2 |
-| User says "keep going" | Extend by 3 iterations | Current + 3 | Never exceed hard cap of 10 |
-| User says "stop" | Exit immediately | N/A | Report progress, preserve current state |
-| Error is in test infrastructure | Exit immediately | N/A | Test runner issues need human attention |
-| 3+ cascading failures | Exit immediately | N/A | The approach is fundamentally wrong |
+| Tests fail after build-fix loop | Test-Fix | 3 | Smaller budget after build stabilization |
+| Multi-file refactoring | Refactor | 10 | Verify build and tests after each target |
+| Generating a new feature | Scaffold | Phase-based | Build-fix and test-fix nested inside |
+| Same error persists after fix | Exit with STUCK | N/A | Report and recommend investigation |
+| Fix introduces more errors | Emergency exit | N/A | Stop and reassess |
+| User says "keep going" | Extend by 3 | Current + 3 | Never exceed 10 |
+| User says "stop" | Exit immediately | N/A | Preserve current state and report progress |

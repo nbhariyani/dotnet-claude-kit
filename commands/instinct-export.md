@@ -42,17 +42,17 @@ User: /instinct-export
 Claude: Exported 7 of 12 instincts (confidence > 0.7):
 
 Exported:
-  - Use vertical slice architecture (0.9)
-  - Explicit mapping over AutoMapper (0.8)
-  - Always add CancellationToken (0.8)
-  - Prefer records for DTOs (0.7)
-  - Use TimeProvider over DateTime (0.7)
+  - Use Feature Modules architecture (0.9)
+  - Explicit mapping over @Expose() (0.8)
+  - Always pass CancellationToken (0.8)
+  - Prefer readonly class properties (0.7)
+  - Use ConfigService over process.env (0.7)
 
 Skipped (below threshold):
-  - Integration tests over unit (0.6)
-  - Serilog structured logging (0.5)
-  - Avoid MediatR for simple flows (0.4)
-  - Prefer Dapper over EF (0.35)
+  - E2E tests over unit tests (0.6)
+  - nestjs-pino for structured logging (0.5)
+  - Avoid EventEmitter for domain events (0.4)
+  - Prefer Fastify over Express (0.35)
 
 Written to: .claude/instincts-export.md
 ```

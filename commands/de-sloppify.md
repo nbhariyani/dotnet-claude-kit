@@ -1,118 +1,108 @@
 ---
 description: >
-  Systematic code cleanup pass. Triggers on: /de-sloppify, "clean this up",
-  "cleanup pass", "tidy the code", "fix the mess", "before PR cleanup".
-  Runs formatting, dead code removal, analyzer fixes, and structural improvements.
+  Systematic code cleanup pipeline for NestJS projects. 7 steps: format, imports,
+  lint, dead code, TODOs, circular deps, missing await. Run before PRs or code review.
+  Triggers on: /de-sloppify, "clean this up", "clean up the code", "fix code quality",
+  "tidy up", "remove slop".
 ---
 
 # /de-sloppify
 
 ## What
 
-A sequential code cleanup pipeline that systematically improves code quality across multiple dimensions:
-
-1. **Format** -- Run `dotnet format` to fix whitespace, indentation, and style violations
-2. **Unused usings** -- Remove all unused `using` directives across the solution
-3. **Analyzer warnings** -- Resolve compiler and Roslyn analyzer warnings (CA/IDE rules)
-4. **Dead code** -- Identify and remove unreferenced types, methods, and properties
-5. **TODOs** -- Surface remaining TODO/HACK/FIXME comments for triage
-6. **Sealed classes** -- Seal classes that are not inherited and not designed for extension
-7. **Missing CancellationToken** -- Add `CancellationToken` parameters to async methods that lack them
-
-Each step is verified before moving to the next. The pipeline stops on build failure and reports what was fixed.
+A 7-step mechanical cleanup sweep that removes noise before a code review or PR. Each
+step is focused and ordered — later steps depend on earlier steps completing cleanly.
+Does not change behavior; only improves code quality signals.
 
 ## When
 
-- Before opening a pull request -- catch quality issues before review
-- After a sprint of feature work -- accumulated tech debt cleanup
-- When the user says "clean this up", "de-sloppify", or "tidy the code"
-- After merging multiple branches -- resolve inconsistencies
-- Periodic hygiene pass on any active project
+- "clean this up"
+- "de-sloppify"
+- "fix code quality"
+- "tidy up before review"
+- "remove slop"
+- Before running `/code-review` or `/verify`
+- After a rapid implementation sprint that left mechanical debt
 
 ## How
 
-### Step 1: Invoke Skills and Agents
+Run steps in order. Report findings at each step before proceeding.
 
-Load the following:
+### Step 1: Format and Auto-fix
 
-- **Skill**: `de-sloppify` -- Provides the cleanup checklist and ordering rules
-- **Agent**: `refactor-cleaner` -- Handles the structural improvements (sealing, CancellationToken propagation, dead code removal)
-
-### Step 2: Run the Pipeline
-
-Execute each cleanup phase sequentially:
-
-```
-1. dotnet format --verify-no-changes   (detect issues)
-2. dotnet format                        (fix formatting)
-3. dotnet build -warnaserror            (surface warnings)
-4. Roslyn MCP: get_diagnostics          (get full diagnostic list)
-5. Roslyn MCP: find_dead_code           (identify unused symbols)
-6. Roslyn MCP: detect_antipatterns      (catch known anti-patterns)
-7. dotnet build                         (verify nothing broke)
-8. dotnet test                          (verify behavior preserved)
+```bash
+npm run lint:fix
 ```
 
-### Step 3: Verify and Report
+Applies Prettier + ESLint auto-fixable rules. Commit the result separately if there
+are many format changes — keeps the diff clean.
 
-After all steps complete, produce a summary:
+### Step 2: Remove Unused Imports
 
-- Files modified (count and list)
-- Warnings resolved (before/after count)
-- Dead code removed (types, methods, properties)
-- Anti-patterns fixed
-- Remaining TODOs surfaced for user decision
-- Build and test status (must be green)
+ESLint `no-unused-vars` and `@typescript-eslint/no-unused-imports` should have caught
+these in Step 1. If any remain, remove manually. Check for:
 
-### Important Rules
+- Unused `import type` declarations
+- Barrel re-exports of deleted files
 
-- **Never change behavior** -- Cleanup is cosmetic and structural only
-- **Verify after each step** -- Run `dotnet build` between phases to catch regressions
-- **Ask before removing** -- If a symbol looks unused but might be part of a public API, ask the user
-- **Respect .editorconfig** -- All formatting follows the project's existing style configuration
-- **Commit incrementally** -- Offer to commit after each major phase for easy rollback
+### Step 3: Fix Remaining Lint Warnings
+
+Address lint warnings that can't be auto-fixed. Common NestJS ones:
+
+- `@typescript-eslint/no-explicit-any` — replace `any` with a proper type
+- `@typescript-eslint/explicit-function-return-type` — add return type annotation
+
+### Step 4: Remove Dead Code
+
+```
+find_dead_code
+```
+
+Delete unused exports, providers registered in modules but never injected, and
+commented-out code blocks older than the current sprint.
+
+### Step 5: Resolve TODOs
+
+Review all `// TODO` and `// FIXME` comments. For each:
+- Fix it now if it takes less than 10 minutes
+- Create a tracked issue and replace with `// TODO(#123): ...`
+- Delete if it is no longer relevant
+
+### Step 6: Break Circular Dependencies
+
+```
+detect_circular_deps
+```
+
+For each cycle found:
+1. Identify the service that can be extracted to a `SharedModule`
+2. Move it, update `imports[]` and `exports[]` in affected modules
+3. Re-run `detect_circular_deps` to confirm resolved
+
+### Step 7: Find Missing Await
+
+```
+detect_antipatterns
+```
+
+Look for async functions that call async methods without `await`. These are silent
+fire-and-forget bugs. Fix each one.
 
 ## Example
 
 ```
-User: /de-sloppify
+Step 1: lint:fix — 14 files reformatted
+Step 2: imports — 3 unused imports removed
+Step 3: lint warnings — 2 any types replaced
+Step 4: dead code — OldHelperService removed (0 callers)
+Step 5: TODOs — 1 fixed inline, 2 ticketed, 1 deleted
+Step 6: circular deps — 0 found
+Step 7: missing await — 1 found in notifications.service.ts:32, fixed
 
-Claude: Starting cleanup pipeline for the solution...
-
-Phase 1/7: Formatting
-  - Running `dotnet format`...
-  - Fixed 12 files (whitespace, using order)
-  - Build: GREEN
-
-Phase 2/7: Unused Usings
-  - Removed 8 unused using directives across 6 files
-  - Build: GREEN
-
-Phase 3/7: Analyzer Warnings
-  - Resolved 5 CA1822 (mark as static), 3 IDE0060 (unused parameter)
-  - Build: GREEN (warnings: 14 -> 6)
-
-Phase 4/7: Dead Code
-  - Found 2 unreferenced internal methods -- removed
-  - Found 1 unreferenced type (OldDto) -- confirm removal? [y/n]
-
-Phase 5/7: TODOs
-  - 3 remaining TODOs found:
-    - OrderService.cs:42  // TODO: add retry logic
-    - Startup.cs:18       // HACK: workaround for config bug
-    - UserRepo.cs:95      // FIXME: n+1 query
-
-Phase 6/7: Sealed Classes
-  - Sealed 4 classes with no derived types
-
-Phase 7/7: CancellationToken
-  - Added CancellationToken to 2 async methods
-  - Propagated to 3 downstream calls
-
-Summary: 23 files modified, warnings 14->6, all tests passing.
+De-sloppify complete. 21 total fixes.
 ```
 
 ## Related
 
-- `/verify` -- Run build and test verification without cleanup
-- `/health-check` -- Broader project health assessment including dependencies and architecture
+- `/code-review` -- Structured review after cleanup
+- `/verify` -- Full build + test + lint pipeline

@@ -1,297 +1,272 @@
 ---
 name: messaging
 description: >
-  Asynchronous messaging patterns for .NET applications. Covers Wolverine and
-  MassTransit, outbox pattern, saga and choreography, and broker configuration
-  for RabbitMQ and Azure Service Bus.
-  Load this skill when implementing event-driven communication, background
-  processing, module-to-module messaging, or when the user mentions "Wolverine",
-  "MassTransit", "message bus", "RabbitMQ", "Azure Service Bus", "event",
-  "publish", "consumer", "outbox", "saga", "integration event", "queue",
-  or "pub/sub".
+  Asynchronous messaging patterns for NestJS: BullMQ queues, EventEmitter2 in-process
+  events, and NATS microservices. Load this skill when working with @nestjs/bullmq,
+  background jobs, @Processor, job retry, EventEmitter2, @OnEvent, NATS, or
+  @MessagePattern.
 ---
-
-# Messaging
 
 ## Core Principles
 
-1. **Wolverine is the recommended default** — MIT licensed, combines mediator + messaging in one library with built-in outbox, saga support, and convention-based handlers. MassTransit is an alternative but requires a commercial license from v9.
-2. **Outbox pattern for reliability** — Always use the transactional outbox to ensure messages are published only when the database transaction succeeds.
-3. **Choreography for simple flows, saga for complex** — If a workflow has 2-3 steps, use event choreography. If it has compensating actions or complex state, use a saga.
-4. **Messages are contracts** — Put message types in a shared contracts project. Keep them as simple records with primitive types.
+1. **BullMQ for work that must survive a restart.** In-process EventEmitter2 events
+   are lost if the process crashes between emit and handler execution. Use BullMQ
+   for anything durable: email sending, payment processing, report generation.
+
+2. **Always configure retry with exponential backoff.** A job with no retry
+   configuration gets one attempt. A transient DB timeout will permanently lose the
+   job. Set `attempts` and `backoff` on every queue.
+
+3. **Rethrow errors in processors — never swallow them.** BullMQ marks a job as
+   failed only when the processor throws. Swallowing errors silently discards jobs
+   with no retry.
+
+4. **EventEmitter2 for in-process pub/sub with no durability requirement.** Domain
+   events that trigger cache invalidation, audit log updates, or notification emails
+   within the same process are a good fit for EventEmitter2.
+
+5. **NATS for inter-service messaging in a microservices architecture.** Use
+   `@MessagePattern` for request-reply and `@EventPattern` for one-way broadcast.
+   Each service is a separate NestJS microservice with its own transport.
 
 ## Patterns
 
-### Wolverine Setup
+### BullMQ: Queue Setup
 
-```csharp
-// Program.cs
-builder.Host.UseWolverine(opts =>
-{
-    // Auto-discover handlers from this assembly
-    opts.Discovery.IncludeAssembly(typeof(Program).Assembly);
+```typescript
+// src/app.module.ts
+import { BullModule } from '@nestjs/bullmq';
+import { ConfigService } from '@nestjs/config';
 
-    // RabbitMQ transport
-    opts.UseRabbitMq(rabbit =>
-    {
-        rabbit.HostName = "localhost";
-        // Or from configuration:
-        // rabbit.HostName = builder.Configuration["RabbitMq:Host"]!;
-    })
-    .AutoProvision()   // Create queues/exchanges automatically
-    .AutoPurgeOnStartup(); // Dev only — clear queues on startup
+@Module({
+  imports: [
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.getOrThrow<string>('REDIS_HOST'),
+          port: config.getOrThrow<number>('REDIS_PORT'),
+          password: config.get<string>('REDIS_PASSWORD'),
+        },
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 1000 },
+          removeOnComplete: { count: 100 },
+          removeOnFail: { count: 500 },
+        },
+      }),
+    }),
+    EmailModule,
+  ],
+})
+export class AppModule {}
 
-    // Enable transactional outbox with EF Core
-    opts.Services.AddDbContextWithWolverineIntegration<AppDbContext>(x =>
-        x.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+// src/email/email.module.ts
+import { BullModule } from '@nestjs/bullmq';
 
-    opts.Policies.AutoApplyTransactions(); // Wrap handlers in DB transactions
+export const EMAIL_QUEUE = 'email';
+
+@Module({
+  imports: [
+    BullModule.registerQueue({
+      name: EMAIL_QUEUE,
+    }),
+  ],
+  providers: [EmailService, EmailProcessor],
+  exports: [EmailService],
+})
+export class EmailModule {}
+```
+
+### BullMQ: Enqueue a Job
+
+```typescript
+// src/email/email.service.ts
+import { Injectable } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
+import { EMAIL_QUEUE } from './email.module';
+
+export interface SendEmailJobData {
+  to: string;
+  subject: string;
+  template: string;
+  context: Record<string, unknown>;
+}
+
+@Injectable()
+export class EmailService {
+  constructor(
+    @InjectQueue(EMAIL_QUEUE) private readonly emailQueue: Queue<SendEmailJobData>,
+  ) {}
+
+  async sendWelcomeEmail(userId: string, email: string): Promise<void> {
+    await this.emailQueue.add(
+      'send-welcome',
+      { to: email, subject: 'Welcome!', template: 'welcome', context: { userId } },
+      { delay: 0, priority: 1 },
+    );
+  }
+}
+```
+
+### BullMQ: Processor
+
+```typescript
+// src/email/email.processor.ts
+import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Logger } from '@nestjs/common';
+import { Job } from 'bullmq';
+import { EMAIL_QUEUE, SendEmailJobData } from './email.module';
+
+@Processor(EMAIL_QUEUE)
+export class EmailProcessor extends WorkerHost {
+  private readonly logger = new Logger(EmailProcessor.name);
+
+  async process(job: Job<SendEmailJobData>): Promise<void> {
+    this.logger.log(`Processing job ${job.id}: ${job.name}`);
+
+    try {
+      await this.sendEmail(job.data);
+      this.logger.log(`Job ${job.id} completed`);
+    } catch (err) {
+      this.logger.error(`Job ${job.id} failed: ${(err as Error).message}`);
+      throw err;  // rethrow so BullMQ marks the job failed and schedules retry
+    }
+  }
+
+  private async sendEmail(data: SendEmailJobData): Promise<void> {
+    // call email provider SDK
+  }
+}
+```
+
+### EventEmitter2: In-Process Events
+
+```typescript
+// src/app.module.ts
+import { EventEmitterModule } from '@nestjs/event-emitter';
+
+@Module({
+  imports: [
+    EventEmitterModule.forRoot({
+      wildcard: true,
+      delimiter: '.',
+    }),
+  ],
+})
+export class AppModule {}
+
+// Emitting from a service
+@Injectable()
+export class OrdersService {
+  constructor(private readonly eventEmitter: EventEmitter2) {}
+
+  async create(dto: CreateOrderDto): Promise<Order> {
+    const order = await this.orderRepository.save(dto);
+    this.eventEmitter.emit('order.created', new OrderCreatedEvent(order.id));
+    return order;
+  }
+}
+
+// Handling with @OnEvent
+@Injectable()
+export class NotificationsService {
+  @OnEvent('order.created', { async: true })
+  async handleOrderCreated(event: OrderCreatedEvent): Promise<void> {
+    // send notification — fire-and-forget within same process
+  }
+}
+```
+
+### NATS Microservice
+
+```typescript
+// src/main.ts (order service — hybrid app)
+const app = await NestFactory.create(AppModule);
+app.connectMicroservice<MicroserviceOptions>({
+  transport: Transport.NATS,
+  options: {
+    servers: [config.getOrThrow('NATS_URL')],
+  },
 });
-```
+await app.startAllMicroservices();
+await app.listen(config.getOrThrow('PORT'));
 
-**Why**: `UseWolverine()` registers handler discovery, transport, and outbox in one place. `AutoProvision()` eliminates manual broker setup during development.
+// Handling a message pattern
+@Controller()
+export class OrdersMicroserviceController {
+  @MessagePattern('order.getById')
+  async getById(@Payload() data: { id: string }): Promise<OrderResponseDto> {
+    return this.ordersService.findById(data.id);
+  }
 
-### Publishing Events
-
-Wolverine supports two publishing styles: cascading messages (return values) and explicit publishing.
-
-```csharp
-// Message contract (in shared Contracts project)
-public record OrderCreated(Guid OrderId, string CustomerId, decimal Total, DateTimeOffset CreatedAt);
-
-// Style 1: Cascading messages — return the event from the handler
-// Wolverine automatically publishes returned messages after the handler completes.
-public static class CreateOrder
-{
-    public record Command(string CustomerId, List<OrderItem> Items);
-    public record Response(Guid OrderId, decimal Total);
-
-    public static async Task<(Response, OrderCreated)> HandleAsync(
-        Command command, AppDbContext db, TimeProvider clock, CancellationToken ct)
-    {
-        var order = Order.Create(command.CustomerId, command.Items, clock.GetUtcNow());
-        db.Orders.Add(order);
-        await db.SaveChangesAsync(ct);
-
-        var response = new Response(order.Id, order.Total);
-        var @event = new OrderCreated(order.Id, order.CustomerId, order.Total, order.CreatedAt);
-
-        return (response, @event); // Both are published automatically
-    }
+  @EventPattern('payment.completed')
+  async onPaymentCompleted(@Payload() event: PaymentCompletedEvent): Promise<void> {
+    await this.ordersService.confirmOrder(event.orderId);
+  }
 }
 ```
-
-```csharp
-// Style 2: Explicit publishing via IMessageBus
-public static class CreateOrder
-{
-    public record Command(string CustomerId, List<OrderItem> Items);
-    public record Response(Guid OrderId, decimal Total);
-
-    public static async Task<Response> HandleAsync(
-        Command command, AppDbContext db, IMessageBus bus, TimeProvider clock, CancellationToken ct)
-    {
-        var order = Order.Create(command.CustomerId, command.Items, clock.GetUtcNow());
-        db.Orders.Add(order);
-        await db.SaveChangesAsync(ct);
-
-        await bus.PublishAsync(new OrderCreated(
-            order.Id, order.CustomerId, order.Total, order.CreatedAt));
-
-        return new Response(order.Id, order.Total);
-    }
-}
-```
-
-**Why**: Cascading messages (tuple return) are simpler and testable — the handler is a pure function. Use explicit `IMessageBus` when publishing is conditional or requires multiple events.
-
-### Consuming Events
-
-Wolverine uses convention-based handlers — no interface, no base class. Just a `Handle` method with the message type as the first parameter.
-
-```csharp
-// Notifications module — handles OrderCreated from Orders module
-public static class OrderCreatedHandler
-{
-    public static async Task HandleAsync(
-        OrderCreated message, NotificationsDbContext db, ILogger logger, CancellationToken ct)
-    {
-        logger.LogInformation("Processing OrderCreated: {OrderId}", message.OrderId);
-
-        var notification = new OrderNotification(message.OrderId, message.CustomerId);
-        db.Notifications.Add(notification);
-        await db.SaveChangesAsync(ct);
-    }
-}
-```
-
-**Why**: Convention-based handlers have zero ceremony. Wolverine discovers them by signature: any public method named `Handle`/`HandleAsync`/`Consume`/`ConsumeAsync` with the message type as the first parameter.
-
-### Transactional Outbox
-
-Ensures messages are only published if the database transaction succeeds.
-
-```csharp
-// 1. Register DbContext with Wolverine integration
-builder.Host.UseWolverine(opts =>
-{
-    opts.Services.AddDbContextWithWolverineIntegration<AppDbContext>(x =>
-        x.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
-
-    opts.Policies.AutoApplyTransactions();
-});
-
-// 2. DbContext — add Wolverine outbox tables
-public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
-{
-    public DbSet<Order> Orders => Set<Order>();
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        // Wolverine inbox/outbox tables — required for transactional messaging
-        modelBuilder.AddIncomingWolverineMessageTable();
-        modelBuilder.AddOutgoingWolverineMessageTable();
-    }
-}
-```
-
-**Why**: `AddDbContextWithWolverineIntegration` + `AutoApplyTransactions` wraps every handler in a transaction that includes outbox writes. Messages are only sent after the transaction commits — no dual-write problem.
-
-### Saga (Stateful Orchestration)
-
-Wolverine sagas use a `Saga<T>` base class with `Start` and `Handle` methods. Cascading messages drive the saga forward.
-
-```csharp
-public record OrderSagaState(Guid Id)
-{
-    public string? CustomerId { get; set; }
-    public bool PaymentReceived { get; set; }
-}
-
-public class OrderSaga : Saga<OrderSagaState>
-{
-    public Guid Id { get; set; }
-
-    // Start the saga when an OrderCreated event arrives
-    public static (OrderSagaState, ProcessPayment) Start(OrderCreated message)
-    {
-        var state = new OrderSagaState(message.OrderId)
-        {
-            CustomerId = message.CustomerId
-        };
-
-        var command = new ProcessPayment(message.OrderId, message.Total);
-        return (state, command); // State is persisted, command is sent
-    }
-
-    // Handle payment result
-    public CompleteOrder Handle(PaymentCompleted message)
-    {
-        PaymentReceived = true;
-        MarkCompleted(); // Ends the saga
-        return new CompleteOrder(Id);
-    }
-
-    // Compensating action on failure
-    public CancelOrder Handle(PaymentFailed message)
-    {
-        MarkCompleted();
-        return new CancelOrder(Id);
-    }
-}
-```
-
-**Why**: Wolverine sagas use simple C# methods instead of a state machine DSL. Each handler returns cascading messages to drive the workflow. `MarkCompleted()` cleans up the saga state.
-
-### Alternative: MassTransit
-
-MassTransit is a mature alternative with a commercial license requirement from v9+. Key API surface:
-
-```csharp
-// Setup
-builder.Services.AddMassTransit(x =>
-{
-    x.SetKebabCaseEndpointNameFormatter();
-    x.AddConsumers(typeof(Program).Assembly);
-    x.UsingRabbitMq((context, cfg) =>
-    {
-        cfg.Host(builder.Configuration.GetConnectionString("RabbitMq"));
-        cfg.ConfigureEndpoints(context);
-    });
-});
-
-// Publishing
-await publishEndpoint.Publish(new OrderCreated(...), ct);
-
-// Consuming — requires IConsumer<T> interface
-public class OrderCreatedConsumer(AppDbContext db) : IConsumer<OrderCreated>
-{
-    public async Task Consume(ConsumeContext<OrderCreated> context)
-    {
-        var message = context.Message;
-        // Handle event...
-    }
-}
-
-// Outbox
-x.AddEntityFrameworkOutbox<AppDbContext>(o =>
-{
-    o.UsePostgres();
-    o.UseBusOutbox();
-});
-
-// Saga — uses MassTransitStateMachine<TState>
-public class OrderSaga : MassTransitStateMachine<OrderSagaState> { /* ... */ }
-```
-
-> **License note**: MassTransit v9+ requires a commercial license for production use. Wolverine (MIT) is the recommended default for new projects.
 
 ## Anti-patterns
 
-### Don't Publish Events Without Outbox
+### Swallowing Errors in Processors
 
-```csharp
-// BAD — if SaveChanges succeeds but Publish fails, data is inconsistent
-await db.SaveChangesAsync(ct);
-await bus.PublishAsync(new OrderCreated(...));
-
-// GOOD — use transactional outbox (messages are in the same transaction)
-// Configure AddDbContextWithWolverineIntegration() + AutoApplyTransactions()
-// Wolverine handles this automatically
-```
-
-### Don't Put Complex Logic in Message Contracts
-
-```csharp
-// BAD — behavior in a message
-public record OrderCreated(Guid OrderId)
-{
-    public decimal CalculateShipping() => /* logic */; // DON'T
+```typescript
+// BAD — job is marked complete even though it failed; no retry
+async process(job: Job<SendEmailJobData>): Promise<void> {
+  try {
+    await this.sendEmail(job.data);
+  } catch {
+    this.logger.error('Email failed');
+    // swallowed — BullMQ never retries
+  }
 }
 
-// GOOD — messages are pure data
-public record OrderCreated(Guid OrderId, string CustomerId, decimal Total, DateTimeOffset CreatedAt);
+// GOOD — rethrow so BullMQ handles retry
+async process(job: Job): Promise<void> {
+  try {
+    await this.sendEmail(job.data);
+  } catch (err) {
+    this.logger.error(`Email failed: ${(err as Error).message}`);
+    throw err;
+  }
+}
 ```
 
-### Don't Use Fire-and-Forget for Important Events
+### No Retry Configuration
 
-```csharp
-// BAD — no guarantee of delivery
-_ = Task.Run(() => bus.PublishAsync(new OrderCreated(...)));
+```typescript
+// BAD — one attempt; transient error permanently loses the job
+BullModule.registerQueue({ name: 'email' })
 
-// GOOD — await the publish (with outbox, this is transactional)
-await bus.PublishAsync(new OrderCreated(...));
+// GOOD — configure retries with backoff
+BullModule.forRoot({
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1000 },
+  },
+})
+```
+
+### EventEmitter2 for Durable Work
+
+```typescript
+// BAD — event is lost if process crashes between emit and handler
+this.eventEmitter.emit('payment.charge', { amount: 99, token: 'tok_...' });
+
+// GOOD — use BullMQ for work that must not be lost
+await this.paymentQueue.add('charge', { amount: 99, token: 'tok_...' });
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Module-to-module communication (new project) | Wolverine with events (MIT, free) |
-| Module-to-module communication (existing MassTransit) | MassTransit (commercial license required from v9) |
-| Reliable event publishing | Transactional outbox (both Wolverine and MassTransit support this) |
-| Simple 2-3 step workflow | Event choreography |
-| Complex workflow with compensation | Wolverine saga or MassTransit saga |
-| Local development broker | RabbitMQ (via Docker or Aspire) |
-| Production cloud broker | Azure Service Bus or RabbitMQ |
-| Want single lib for mediator + messaging | Wolverine (replaces both Mediator and MassTransit) |
+|---|---|
+| Email / PDF / report generation | BullMQ with retry + exponential backoff |
+| Cache invalidation after event | EventEmitter2 `@OnEvent` (in-process, fire-and-forget) |
+| Domain events (audit log, notifications) | EventEmitter2 for simple cases; BullMQ if durability needed |
+| Inter-service communication | NATS `@MessagePattern` (request-reply) |
+| Broadcast to multiple services | NATS `@EventPattern` (pub/sub) |
+| Scheduled/recurring jobs | `@nestjs/schedule` with `@Cron` |
+| Rate-limited external API calls | BullMQ with `limiter` option on the queue |

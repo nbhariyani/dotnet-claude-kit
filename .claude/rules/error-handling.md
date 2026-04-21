@@ -1,56 +1,86 @@
 ---
 alwaysApply: true
 description: >
-  Enforces Result pattern for expected failures, ProblemDetails for HTTP errors,
-  and boundary-only exception handling in .NET projects.
+  NestJS error handling rules: HttpException hierarchy, ExceptionFilter,
+  no try-catch in controllers, and ProblemDetails response format.
 ---
 
-# Error Handling Rules
+# Error Handling Rules (NestJS)
 
-## Result Pattern Over Exceptions
+## HttpException Over Generic Error
 
-- **DO** use a Result/Result<T> pattern for expected failure paths (not found, validation, conflict).
-  Rationale: Exceptions are expensive and hide control flow. Results make failure explicit in the type system.
+- **DO** throw typed `HttpException` subclasses from services for expected failures.
+  Rationale: Typed exceptions map to correct HTTP status codes automatically and make
+  failure modes explicit in the service contract.
 
-- **DON'T** use try-catch for flow control. If you can predict the failure, return a Result.
-  Rationale: try-catch obscures the happy path and makes code harder to reason about.
+- **DON'T** throw `new Error(...)` from services.
+  Rationale: Generic errors become unhandled 500s and hide the actual failure category.
 
-- **DO** define typed error codes in your Result type: `NotFound`, `Validation`, `Conflict`, `Unauthorized`.
-  Rationale: Typed errors enable consistent mapping to HTTP status codes and structured logging.
+```typescript
+// DO
+throw new NotFoundException(`Order ${id} not found`);
+throw new ConflictException('Order already shipped');
+throw new BadRequestException('Invalid payment method');
 
-## ProblemDetails for HTTP Responses
+// DON'T
+throw new Error('not found');
+```
 
-- **DO** return ProblemDetails (RFC 9457) for all HTTP error responses.
-  Rationale: Industry standard format that clients can parse consistently across endpoints.
+## Global ExceptionFilter Is Mandatory
 
-- **DON'T** return bare strings or ad-hoc JSON for errors.
-  Rationale: Inconsistent error shapes break client error handling and make debugging harder.
+- **DO** register a global `ExceptionFilter` in `main.ts` before `app.listen()`.
+  Rationale: Without it, unhandled exceptions leak stack traces and internal details
+  to clients in production.
 
-## Exception Handling Boundaries
+```typescript
+app.useGlobalFilters(new AllExceptionsFilter());
+```
 
-- **DO** verify `app.UseExceptionHandler()` + `IExceptionHandler` (or inline handler) exists in Program.cs for EVERY web project. If missing, scaffold it immediately.
-  Rationale: Without a global handler, unhandled exceptions leak stack traces in production.
+- **DON'T** rely on NestJS's default error format for production.
+  Rationale: Default format is not RFC 9457 ProblemDetails-compliant.
 
-- **DON'T** catch bare `Exception` unless at the application boundary (middleware/top-level handler).
-  Rationale: Broad catches swallow bugs silently. Only the outermost layer should catch everything.
+## Controllers Never Catch
 
-- **DON'T** catch and rethrow without adding context. Either handle it or let it propagate.
-  Rationale: Catch-and-rethrow without value destroys stack traces and adds noise.
+- **DON'T** use try-catch in controllers.
+  Rationale: Controllers are thin HTTP adapters. Exception handling belongs in the filter.
 
-## Boundary Validation
+```typescript
+// DON'T
+@Get(':id')
+async findOne(@Param('id') id: string) {
+  try { return await this.service.findById(id); }
+  catch { throw new NotFoundException(); }
+}
 
-- **DO** validate at system boundaries: API input, external service responses, file/config data.
-  Rationale: Bad data should be rejected at the edge before it corrupts internal state.
+// DO — let the filter handle it
+@Get(':id')
+findOne(@Param('id', ParseUUIDPipe) id: string) {
+  return this.service.findById(id);
+}
+```
 
-- **DON'T** defensively validate inside internal/private methods.
-  Rationale: Internal code should trust validated data. Double-validation adds noise without safety.
+## ValidationPipe Is Mandatory
+
+- **DO** register `ValidationPipe` globally in `main.ts` with `whitelist: true`.
+  Rationale: Unvalidated input reaching services is the primary source of security
+  vulnerabilities and data corruption.
+
+```typescript
+app.useGlobalPipes(new ValidationPipe({
+  whitelist: true,
+  forbidNonWhitelisted: true,
+  transform: true,
+}));
+```
 
 ## Quick Reference
 
 | Scenario | Approach |
 |---|---|
-| User input invalid | Result with Validation error |
-| Entity not found | Result with NotFound error |
-| Unhandled crash | IExceptionHandler middleware |
-| External API failure | Catch specific exception, return Result |
-| Concurrent update | Result with Conflict error |
+| Resource not found | `throw new NotFoundException(...)` |
+| Input validation failed | `ValidationPipe` + `BadRequestException` |
+| Duplicate / state conflict | `throw new ConflictException(...)` |
+| Not authenticated | `throw new UnauthorizedException(...)` |
+| Not authorized | `throw new ForbiddenException(...)` |
+| Multiple named domain failures | `neverthrow` Result pattern |
+| Unexpected crash | Global filter catches, logs, returns 500 |

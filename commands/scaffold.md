@@ -1,104 +1,94 @@
 ---
 description: >
-  Architecture-aware feature scaffolding for .NET 10 projects. Detects the
-  project's architecture (VSA, Clean Architecture, DDD, Modular Monolith) and
-  generates complete feature slices with all required layers: endpoint, handler,
-  validator, DTOs, EF configuration, and integration tests.
-  Use when: "scaffold", "create feature", "add feature", "new endpoint",
-  "generate", "add entity", "scaffold a module", "add module".
+  Generate NestJS modules, controllers, services, guards, pipes, or filters using
+  the Nest CLI. Architecture-aware — places files in the correct location for Feature
+  Modules or Clean Architecture. Triggers on: "create a module", "add a controller",
+  "generate a service", "scaffold orders feature", "add guard", "new pipe", "create filter".
 ---
 
-# /scaffold -- Architecture-Aware Feature Scaffolding
+# /scaffold
 
 ## What
 
-Generates a complete feature with all required files based on the project's
-architecture. Never generates half a feature -- every scaffold includes the
-endpoint, handler, validation, DTOs, EF configuration, and at least one
-integration test as a single unit.
-
-Supported architectures:
-- **Vertical Slice Architecture (VSA)** -- Single-file features in `Features/`
-- **Clean Architecture (CA)** -- Files across Domain, Application, Infrastructure, API layers
-- **DDD + Clean Architecture** -- Aggregate roots, value objects, domain events, plus CA layers
-- **Modular Monolith** -- Self-contained modules with internal layering
+Runs `nest g` CLI commands for the requested component type. Understands the project's
+architecture pattern (Feature Modules vs Clean Architecture) and places files in the
+right directory. For full features, generates the complete slice: module + controller
++ service + DTOs.
 
 ## When
 
-- "Scaffold a [feature name]", "create an endpoint for", "add a feature"
-- "Generate CRUD for", "add entity", "new module"
-- Starting a new feature after `/plan` has produced an approved plan
-- Any time the user wants a complete, working feature skeleton
+- "create a module"
+- "add a controller"
+- "generate a service"
+- "scaffold orders feature" (full feature slice)
+- "add guard", "new pipe", "create filter"
+- Any new NestJS component that should follow the project's established pattern
 
 ## How
 
-### Step 1: Detect Architecture
+### Step 1: Identify Component Type
 
-Use the `architecture-advisor` skill to determine the project's architecture:
-- Examine folder structure, project references, and existing patterns
-- If architecture is ambiguous, ask the user rather than guessing
-- Load the corresponding architecture skill (vertical-slice, clean-architecture, ddd)
+If the request is ambiguous, ask once: "What should I scaffold — a full feature module,
+or a specific component (controller / service / guard / pipe / filter)?"
 
-### Step 2: Learn Conventions
+### Step 2: Run Nest CLI Commands
 
-Before generating, use the `convention-learner` and MCP tools to check:
-- Naming patterns (`*Handler`, `*Service`, `*Endpoint`, `*Command`, `*Query`)
-- Folder structure and file organization
-- Access modifiers, sealed/unsealed conventions
-- Existing validation approach (FluentValidation, data annotations, manual)
-- Test project structure and naming (`*Tests`, `*IntegrationTests`)
+**Full feature module (most common):**
 
-Match what exists. Do not impose new conventions on an established codebase.
+```bash
+nest g module orders
+nest g controller orders --no-spec
+nest g service orders --no-spec
+```
 
-### Step 3: Generate All Layers
+Then manually create DTOs in `src/orders/dto/`:
+- `create-order.dto.ts` — with `class-validator` decorators and `@ApiProperty`
+- `update-order.dto.ts` — extends `PartialType(CreateOrderDto)`
+- `order-response.dto.ts` — response shape (no entity exposure)
 
-Generate files for every layer the architecture requires. For example, in VSA:
+**Single component:**
 
-| File | Purpose |
-|------|---------|
-| `Features/{Name}/Create{Name}.cs` | Command, handler, response, endpoint |
-| `Features/{Name}/Get{Name}.cs` | Query, handler, response, endpoint |
-| `Features/{Name}/{Name}Configuration.cs` | EF Core entity configuration |
-| `Features/{Name}/Create{Name}Validator.cs` | FluentValidation rules |
-| `Tests/Features/{Name}/Create{Name}Tests.cs` | Integration test |
-| `Tests/Features/{Name}/Get{Name}Tests.cs` | Integration test |
+```bash
+nest g guard common/guards/jwt-auth          # guard
+nest g pipe common/pipes/parse-object-id     # pipe
+nest g filter common/filters/http-exception  # filter
+nest g interceptor common/interceptors/logging  # interceptor
+```
+
+### Step 3: Register in AppModule
+
+Add the new feature module to `AppModule.imports[]`:
+
+```typescript
+@Module({
+  imports: [OrdersModule, UsersModule],
+})
+export class AppModule {}
+```
 
 ### Step 4: Verify
 
-Run a quick build check to ensure the scaffolded code compiles:
-```bash
-dotnet build --no-restore
-```
+Run `get_diagnostics` (or `npx tsc --noEmit`) to confirm no TypeScript errors were
+introduced by the scaffolding.
 
 ## Example
 
-```
-User: /scaffold a Product Catalog feature with CRUD operations
+```bash
+# Scaffold a full orders feature
+nest g module orders
+nest g controller orders --no-spec
+nest g service orders --no-spec
 
-Claude: Detected architecture: Vertical Slice Architecture
-
-Generating Product Catalog feature...
-
-Created files:
-  src/Features/Products/CreateProduct.cs     -- Command + handler + endpoint
-  src/Features/Products/GetProduct.cs        -- Query by ID + handler + endpoint
-  src/Features/Products/ListProducts.cs      -- Paginated list + handler + endpoint
-  src/Features/Products/UpdateProduct.cs     -- Command + handler + endpoint
-  src/Features/Products/DeleteProduct.cs     -- Command + handler + endpoint
-  src/Features/Products/ProductConfig.cs     -- EF Core configuration
-  src/Features/Products/CreateProductValidator.cs
-  src/Features/Products/UpdateProductValidator.cs
-  tests/Features/Products/CreateProductTests.cs
-  tests/Features/Products/GetProductTests.cs
-  tests/Features/Products/ListProductsTests.cs
-
-Build check: PASS
-
-All files follow your existing conventions (sealed handlers,
-primary constructors, TypedResults return types).
+# Created:
+#   src/orders/orders.module.ts
+#   src/orders/orders.controller.ts
+#   src/orders/orders.service.ts
+#   src/orders/dto/create-order.dto.ts      (generated)
+#   src/orders/dto/update-order.dto.ts      (generated)
+#   src/orders/dto/order-response.dto.ts    (generated)
 ```
 
 ## Related
 
-- `/plan` -- Plan the feature before scaffolding
-- `/tdd` -- Use TDD to drive the implementation after scaffolding the skeleton
+- `/nest-init` -- Bootstrap the project before scaffolding features
+- `/tdd` -- Write tests alongside the scaffolded code

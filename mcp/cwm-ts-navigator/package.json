@@ -1,0 +1,25 @@
+{
+  "name": "@cwm/ts-navigator",
+  "version": "0.1.0",
+  "description": "TypeScript code navigation MCP server for NestJS projects",
+  "main": "dist/index.js",
+  "bin": { "cwm-ts-navigator": "dist/index.js" },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "test": "jest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "ts-morph": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest",
+    "tsx": "latest",
+    "jest": "latest",
+    "@types/jest": "latest",
+    "ts-jest": "latest"
+  }
+}

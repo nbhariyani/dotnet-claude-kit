@@ -1,78 +1,90 @@
 ---
 alwaysApply: true
 description: >
-  Enforces modern C# 14 coding conventions, naming standards, and file
-  organization for all .NET code in this repository.
+  TypeScript and NestJS coding style conventions: strict mode, const/let,
+  interfaces, decorators, naming, file organization, and formatting standards.
 ---
 
-# C# Coding Style
+# TypeScript / NestJS Coding Style
 
 ## File Organization
 
-- **File-scoped namespaces always.** Block-scoped namespaces waste indentation for zero benefit.
-- **One type per file.** File name must match the type name exactly (`OrderService.cs` contains `OrderService`).
-- **Order members:** constants, fields, constructors, properties, public methods, private methods. Consistent ordering reduces cognitive load when scanning a file.
+- **One class per file.** File name must match the exported class name exactly
+  (`orders.service.ts` exports `OrdersService`).
+- **Feature-first folder structure.** Group by domain (`orders/`, `users/`), not by
+  type (`controllers/`, `services/`).
+- **Suffix conventions:** `*.controller.ts`, `*.service.ts`, `*.module.ts`,
+  `*.entity.ts`, `*.dto.ts`, `*.guard.ts`, `*.interceptor.ts`, `*.pipe.ts`,
+  `*.filter.ts`, `*.spec.ts`, `*.e2e-spec.ts`.
 
 ## Type Declarations
 
-- **Primary constructors for DI injection.** Eliminates boilerplate field assignments and `_field = field` ceremony.
+- **`const` over `let`, never `var`.** `let` only when reassignment is required.
+- **Explicit return types on public methods.** TypeScript infers return types, but
+  explicit annotations serve as API contracts and catch accidental changes.
 
-```csharp
+```typescript
 // DO
-public sealed class OrderService(IDbContext db, TimeProvider clock) { }
+async findById(id: string): Promise<Order> { ... }
 
 // DON'T
-public class OrderService
-{
-    private readonly IDbContext _db;
-    public OrderService(IDbContext db) { _db = db; }
-}
+async findById(id: string) { ... } // return type hidden
 ```
 
-- **Records for DTOs and value objects.** Immutability, value equality, and `with` expressions for free.
+- **`interface` for public contracts, `type` for unions/intersections.**
 
-```csharp
-public sealed record CreateOrderRequest(string ProductId, int Quantity);
-public sealed record Money(decimal Amount, string Currency);
+```typescript
+// DO — interface for shape contracts
+interface OrderRepository { findById(id: string): Promise<Order | null>; }
+
+// DO — type for unions
+type OrderStatus = 'pending' | 'shipped' | 'cancelled';
 ```
 
-- **`sealed` on classes not designed for inheritance.** The JIT can devirtualize calls on sealed types, and it communicates intent clearly.
-- **`internal` by default, `public` only when needed.** Minimize the public API surface. If nothing outside the project references it, it should be `internal`.
+- **`readonly` on class properties that should not be reassigned.**
+- **`satisfies` operator to validate object literals against a type without widening.**
+
+```typescript
+const config = {
+  maxRetries: 3,
+  timeoutMs: 5000,
+} satisfies AppConfig;
+```
+
+## Naming
+
+- **PascalCase** for classes, interfaces, enums, decorators.
+- **camelCase** for variables, functions, method names, and properties.
+- **SCREAMING_SNAKE_CASE** for module-level constants and injection tokens.
+- **Async suffix on all async methods** — `findByIdAsync` is wrong NestJS convention;
+  use `findById` and let the `Promise` return type communicate async nature.
+- **No `I` prefix on interfaces** — `OrderRepository`, not `IOrderRepository`.
 
 ## Expressions and Patterns
 
-- **Collection expressions over constructor calls.** Shorter, compiler-optimized, and consistent across collection types.
+- **Optional chaining and nullish coalescing** over nested if-null checks.
 
-```csharp
+```typescript
 // DO
-List<int> ids = [1, 2, 3];
-int[] arr = [4, 5, 6];
+const city = user?.address?.city ?? 'Unknown';
 
 // DON'T
-var ids = new List<int> { 1, 2, 3 };
+const city = user && user.address && user.address.city ? user.address.city : 'Unknown';
 ```
 
-- **Pattern matching over if-else chains.** Switch expressions and `is` patterns are more readable and exhaustiveness-checked.
+- **Arrow functions for callbacks.** Named functions for top-level module-scope
+  functions, class methods, and anything that needs `this` binding explicitly.
+- **Template literals over string concatenation** for any multi-part string.
+- **`async/await` over `.then()/.catch()` chains** for all async code.
+- **Strict mode required.** `tsconfig.json` must have `"strict": true`.
 
-```csharp
-// DO
-var label = status switch
-{
-    OrderStatus.Pending => "Awaiting payment",
-    OrderStatus.Shipped => "On the way",
-    _ => "Unknown"
-};
+## DO / DON'T Quick Reference
 
-// DON'T
-string label;
-if (status == OrderStatus.Pending) label = "Awaiting payment";
-else if (status == OrderStatus.Shipped) label = "On the way";
-else label = "Unknown";
-```
-
-## Naming and Modifiers
-
-- **`var` for obvious types, explicit types when clarity matters.** Use `var` when the right-hand side makes the type self-evident (`var order = new Order()`); spell it out when it does not (`HttpResponseMessage response = await ...`).
-- **Async suffix on all async methods.** `GetOrderAsync`, not `GetOrder`, for methods returning `Task` or `ValueTask`. Prevents accidental sync calls.
-- **PascalCase** for public members, types, namespaces, and methods. **camelCase** for local variables and parameters.
-- **No `_` prefix on private fields when using primary constructors.** The parameter name is the field name.
+| DO | DON'T |
+|---|---|
+| `const x = ...` | `var x = ...` or unnecessary `let` |
+| `interface Shape { ... }` for contracts | `IShape` prefix |
+| `async findById(): Promise<X>` | Missing return type on public methods |
+| `user?.roles ?? []` | `user && user.roles ? user.roles : []` |
+| `@Injectable()` on all providers | Missing decorator causing DI errors |
+| `private readonly repo: Repository<X>` | Mutable injected dependencies |

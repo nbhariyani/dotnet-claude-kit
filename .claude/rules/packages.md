@@ -1,47 +1,61 @@
 ---
 alwaysApply: true
 description: >
-  Enforces latest stable NuGet package versions and proper dependency management
-  for .NET 10 projects. Prevents outdated package references from training data.
+  NestJS package management rules: always use latest stable versions, vetted
+  package list, pnpm preference, and central version management.
 ---
 
-# Package Management Rules
+# Package Management Rules (NestJS)
 
 ## Always Use Latest Stable Versions
 
-- **Never hardcode package versions from memory.** Your training data contains outdated 8.x/9.x versions. Always verify the latest stable version before adding a package.
-- **Run `dotnet add package <name>` without a `--version` flag** to automatically pull the latest stable release from NuGet.org. This is the safest default.
+- **Never hardcode package versions from memory.** Training data contains outdated
+  versions. Always verify the latest stable version before adding a package.
+- **Run `npm install <name>` (or `pnpm add <name>`) without a version flag** to get
+  the latest stable release automatically.
 
 ```bash
-# DO — gets latest stable automatically
-dotnet add package Mediator.Abstractions
-dotnet add package Mediator.SourceGenerator
-dotnet add package Serilog.AspNetCore
-dotnet add package FluentValidation
+# DO — gets latest stable
+pnpm add @nestjs/swagger class-validator class-transformer
 
 # DON'T — hardcoded version likely outdated
-dotnet add package Mediator.Abstractions --version 2.0.0
-dotnet add package Serilog.AspNetCore --version 8.0.0
+pnpm add @nestjs/swagger@7.0.0
 ```
 
-- **For Microsoft.* packages targeting .NET 10, use 10.x versions.** These track the runtime: `Microsoft.EntityFrameworkCore` 10.x, `Microsoft.Extensions.*` 10.x, `Microsoft.AspNetCore.*` 10.x.
-- **When writing `<PackageReference>` in .csproj files**, use `dotnet add package` first to resolve the correct version, then copy it into the project file.
+## Vetted Package Stack
 
-## Central Package Management
+| Category | Package | Notes |
+|---|---|---|
+| Framework | `@nestjs/core`, `@nestjs/common`, `@nestjs/platform-express` | Core |
+| ORM (default) | `typeorm`, `@nestjs/typeorm` | Code-first |
+| ORM (alternative) | `prisma`, `@prisma/client` | Schema-first |
+| Validation | `class-validator`, `class-transformer` | Required pair |
+| Auth | `@nestjs/passport`, `passport-jwt`, `@nestjs/jwt` | Standard |
+| Config | `@nestjs/config` | Always use over `process.env` |
+| Swagger | `@nestjs/swagger`, `swagger-ui-express` | OpenAPI 3 |
+| Health | `@nestjs/terminus` | — |
+| Caching | `@nestjs/cache-manager`, `cache-manager`, `ioredis` | Redis backend |
+| Messaging | `@nestjs/bullmq`, `bullmq` | Queue-based |
+| Scheduling | `@nestjs/schedule` | Cron jobs |
+| HTTP client | `@nestjs/axios` | Never raw `axios` |
+| Logging | `nestjs-pino`, `pino` | Structured logging |
+| Resilience | `cockatiel` | Retry/circuit-breaker |
+| Security | `helmet`, `@nestjs/throttler` | Always apply |
+| Testing | `jest`, `supertest`, `@testcontainers/postgresql` | Standard test stack |
+| Result pattern | `neverthrow` | When typed failures needed |
 
-- **Use `Directory.Packages.props` for multi-project solutions.** Centralizes all version pins in one file, preventing version drift across projects.
-- When a solution has `Directory.Packages.props` with `<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>`, individual .csproj files must NOT specify `Version=` on `<PackageReference>`.
+## Package Manager
 
-## Version Verification
+- **Prefer `pnpm` over `npm` and `yarn`** for disk efficiency and strict dependency
+  isolation. Do not mix package managers within a project — check for `pnpm-lock.yaml`,
+  `package-lock.json`, or `yarn.lock` before choosing.
 
-- If unsure about the latest version, suggest the user verify on NuGet.org or run `dotnet package search <name>`.
-- **Never downgrade a package** that is already in the project unless explicitly asked or there is a known compatibility issue.
-- Prefer release versions over preview/RC unless the project explicitly targets preview features.
+## DO / DON'T Quick Reference
 
-## .NET 10 Alignment
-
-- Target framework: `net10.0`
-- All `Microsoft.*` and `System.*` packages: 10.x
-- EF Core and providers: 10.x
-- ASP.NET Core testing packages: 10.x
-- Third-party packages: latest stable that supports .NET 10
+| DO | DON'T |
+|---|---|
+| `pnpm add <package>` (no version) | Hardcode version from memory |
+| Verify latest on npmjs.com if unsure | Trust training data for version numbers |
+| `@nestjs/config` + `ConfigService` | `process.env.X` directly in code |
+| `@nestjs/axios` for HTTP calls | Raw `require('axios')` |
+| `nestjs-pino` for logging | `console.log` |

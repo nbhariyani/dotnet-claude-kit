@@ -53,19 +53,19 @@ User: /instinct-status
 
 Claude: ## Project Instincts (12 total, avg confidence: 0.72)
 
-| Instinct                        | Confidence | Category     | Status     |
-|---------------------------------|------------|--------------|------------|
-| Use vertical slice architecture | 0.9        | architecture | reinforced |
-| Explicit mapping over AutoMapper| 0.8        | style        | reinforced |
-| Always add CancellationToken    | 0.8        | performance  | promoted   |
-| Prefer records for DTOs         | 0.7        | style        | stable     |
-| Use TimeProvider over DateTime  | 0.7        | testing      | stable     |
-| Integration tests over unit     | 0.6        | testing      | new        |
-| Serilog structured logging      | 0.5        | style        | new        |
-| Avoid MediatR for simple flows  | 0.4        | architecture | tentative  |
+| Instinct                          | Confidence | Category     | Status     |
+|-----------------------------------|------------|--------------|------------|
+| Use Feature Modules architecture  | 0.9        | architecture | reinforced |
+| Explicit mapping over @Expose()   | 0.8        | style        | reinforced |
+| Always pass CancellationToken     | 0.8        | performance  | promoted   |
+| Prefer readonly class properties  | 0.7        | style        | stable     |
+| Use ConfigService over process.env| 0.7        | security     | stable     |
+| E2E tests over unit tests         | 0.6        | testing      | new        |
+| nestjs-pino for structured logging| 0.5        | style        | new        |
+| Avoid EventEmitter for domain events | 0.4     | architecture | tentative  |
 
 2 instincts reinforced this session.
-1 instinct decaying (no recent reinforcement): "Prefer Dapper over EF" (0.35)
+1 instinct decaying (no recent reinforcement): "Prefer Fastify over Express" (0.35)
 ```
 
 ## Related

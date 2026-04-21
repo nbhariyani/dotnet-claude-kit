@@ -1,235 +1,182 @@
 ---
 name: container-publish
 description: >
-  Dockerfile-less containerization using the .NET 10 SDK container publishing
-  feature. Covers MSBuild properties, chiseled images, multi-arch builds, and
-  registry publishing — all without writing a Dockerfile.
-  Load this skill when the user wants to containerize without a Dockerfile, or
-  mentions "dotnet publish container", "PublishContainer", "ContainerRepository",
-  "ContainerFamily", "chiseled", "distroless", "container publish", "SDK
-  container", "no Dockerfile", or "containerize without Docker".
+  Publishing Docker images for NestJS apps. Load this skill when pushing images
+  to a container registry, using docker buildx for multi-arch builds, publishing
+  to GHCR (GitHub Container Registry), setting up GitHub Actions for docker
+  build-push, or managing semver and :latest tags.
 ---
-
-# Container Publishing (No Dockerfile)
 
 ## Core Principles
 
-1. **No Dockerfile needed** — The .NET 10 SDK builds OCI-compliant container images directly from `dotnet publish /t:PublishContainer`. No Dockerfile to write or maintain.
-2. **Chiseled images for production** — Use `noble-chiseled` base images: no shell, no package manager, 7 Linux components vs 100+. Smallest attack surface.
-3. **Non-root by default** — .NET 10 container images run as the `app` user automatically. Never override to root in production.
-4. **Configuration in the .csproj** — All container settings are MSBuild properties, versioned with your project. No separate files to drift.
+1. **Always publish both a semver tag and :latest.** Pinning to a semver tag enables
+   rollback. The :latest tag lets integrations pick up new releases without config
+   changes. Publish both in every release workflow.
+
+2. **Multi-arch by default (amd64 + arm64).** ARM-based runners and Apple Silicon
+   development machines require arm64 images. `docker buildx` handles both in a
+   single push.
+
+3. **Use GHCR with GITHUB_TOKEN — no extra secrets.** GitHub Container Registry
+   authenticates with the built-in `GITHUB_TOKEN`. No manual PAT management needed.
+
+4. **Never push :latest from a branch.** Only tag workflows triggered by semver
+   tags (`v*.*.*`) or merges to main should push :latest. Branch pushes should only
+   push a sha-tagged image for traceability.
+
+5. **Sign and attest images in production.** Use `docker/attest-build-provenance-action`
+   or Cosign to attest that CI built the image. Unsigned images in production are a
+   supply chain risk.
 
 ## Patterns
 
-### Minimal Container Publish
-
-No project file changes needed. Just publish:
+### docker buildx: Multi-Arch Local Build
 
 ```bash
-dotnet publish /t:PublishContainer --os linux --arch x64
+# Create a buildx builder with multi-arch support
+docker buildx create --name multi --use
+
+# Build and push amd64 + arm64
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --target production \
+  --tag ghcr.io/my-org/my-api:1.2.3 \
+  --tag ghcr.io/my-org/my-api:latest \
+  --push \
+  .
 ```
 
-This creates a container image in your local Docker daemon using the default `aspnet:10.0` base image.
-
-### Production-Ready .csproj Configuration
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk.Web">
-
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ContainerRepository>mycompany/myapp-api</ContainerRepository>
-    <ContainerFamily>noble-chiseled</ContainerFamily>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <ContainerPort Include="8080" Type="tcp" />
-    <ContainerEnvironmentVariable Include="ASPNETCORE_HTTP_PORTS" Value="8080" />
-    <ContainerEnvironmentVariable Include="DOTNET_EnableDiagnostics" Value="0" />
-    <ContainerLabel Include="org.opencontainers.image.vendor" Value="MyCompany" />
-  </ItemGroup>
-
-</Project>
-```
-
-### Publishing to a Registry
-
-Authenticate with `docker login` first, then specify the registry:
-
-```bash
-# GitHub Container Registry
-docker login ghcr.io
-dotnet publish /t:PublishContainer --os linux --arch x64 \
-    -p ContainerRegistry=ghcr.io \
-    -p ContainerImageTag=1.0.0
-
-# Azure Container Registry
-az acr login --name myregistry
-dotnet publish /t:PublishContainer --os linux --arch x64 \
-    -p ContainerRegistry=myregistry.azurecr.io
-
-# Docker Hub (requires username prefix in repository)
-dotnet publish /t:PublishContainer --os linux --arch x64 \
-    -p ContainerRegistry=docker.io \
-    -p ContainerRepository=myuser/myapp
-```
-
-### Multi-Architecture Images
-
-Build images for multiple platforms with a single publish:
-
-```xml
-<PropertyGroup>
-    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
-    <ContainerRuntimeIdentifiers>linux-x64;linux-arm64</ContainerRuntimeIdentifiers>
-</PropertyGroup>
-```
-
-```bash
-dotnet publish /t:PublishContainer
-```
-
-This produces an OCI Image Index — registries serve the correct architecture automatically.
-
-### Multiple Tags
-
-```bash
-# Bash — note the quoting for semicolons
-dotnet publish /t:PublishContainer --os linux --arch x64 \
-    -p ContainerImageTags='"1.0.0;latest"'
-```
-
-Or in the project file:
-
-```xml
-<ContainerImageTags>1.0.0;latest</ContainerImageTags>
-```
-
-### Save as Tarball (No Docker Required)
-
-No container runtime needed on the build machine. Useful for CI scanning:
-
-```bash
-dotnet publish /t:PublishContainer --os linux --arch x64 \
-    -p ContainerArchiveOutputPath=./images/myapp.tar.gz
-
-# Scan with Trivy before pushing
-trivy image --input ./images/myapp.tar.gz
-```
-
-### Chiseled Image Variants
-
-| ContainerFamily | Use Case | Shell | Size |
-|----------------|----------|-------|------|
-| *(default)* | General purpose (Debian) | Yes | ~220 MB |
-| `noble-chiseled` | Production (no shell) | No | ~110 MB |
-| `noble-chiseled-extra` | Production with localization (ICU) | No | ~120 MB |
-| `alpine` | Small size, has shell | Yes | ~112 MB |
-
-```xml
-<!-- Standard chiseled (InvariantGlobalization=true) -->
-<ContainerFamily>noble-chiseled</ContainerFamily>
-
-<!-- Chiseled with ICU for localization -->
-<ContainerFamily>noble-chiseled-extra</ContainerFamily>
-```
-
-For Native AOT, the SDK auto-selects `chiseled-aot`:
-
-```xml
-<PublishAot>true</PublishAot>
-<!-- SDK picks runtime-deps:10.0-noble-chiseled-aot automatically -->
-```
-
-### CI/CD with GitHub Actions
+### GitHub Actions: Build and Push on Tag
 
 ```yaml
+# .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
-  publish:
+  build-and-push:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          dotnet-version: '10.0.x'
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - run: |
-          dotnet publish src/MyApp.Api/MyApp.Api.csproj \
-            /t:PublishContainer --os linux --arch x64 \
-            -p ContainerRegistry=ghcr.io \
-            -p ContainerRepository=${{ github.repository_owner }}/myapp \
-            -p ContainerImageTag=${{ github.sha }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+```
+
+### GitHub Actions: Push SHA Tag on Every Main Merge
+
+```yaml
+# .github/workflows/ci.yml (add to existing CI job)
+- name: Build and push SHA-tagged image
+  if: github.ref == 'refs/heads/main'
+  uses: docker/build-push-action@v5
+  with:
+    context: .
+    target: production
+    platforms: linux/amd64,linux/arm64
+    push: true
+    tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+    cache-from: type=gha
+    cache-to: type=gha,mode=max
+```
+
+### Making the GHCR Image Public
+
+By default GHCR images are private. To make them public:
+1. Navigate to the package on GitHub.
+2. Package settings > Change visibility > Public.
+
+Or via GitHub CLI:
+```bash
+gh api --method PATCH /user/packages/container/my-api \
+  -f visibility=public
 ```
 
 ## Anti-patterns
 
-### Don't Use the Deprecated Property Names
-
-```xml
-<!-- BAD — ContainerImageName is deprecated -->
-<ContainerImageName>myapp</ContainerImageName>
-
-<!-- GOOD — use ContainerRepository -->
-<ContainerRepository>myapp</ContainerRepository>
-```
-
-### Don't Use PublishProfile=DefaultContainer
+### :latest Only Tag (No Rollback)
 
 ```bash
-# BAD — old approach, inconsistent across project types
-dotnet publish -p:PublishProfile=DefaultContainer
+# BAD — if :latest is broken, there is no previous version to roll back to
+docker buildx build --tag ghcr.io/my-org/my-api:latest --push .
 
-# GOOD — use the MSBuild target directly
-dotnet publish /t:PublishContainer
+# GOOD — always tag with a specific version too
+docker buildx build \
+  --tag ghcr.io/my-org/my-api:1.2.3 \
+  --tag ghcr.io/my-org/my-api:latest \
+  --push .
 ```
 
-### Don't Forget to Target Linux
+### Single-Arch Images
 
 ```bash
-# BAD on Windows — may produce a Windows container
-dotnet publish /t:PublishContainer
+# BAD — arm64 hosts (Apple Silicon CI, Graviton) cannot run this image
+docker build -t ghcr.io/my-org/my-api:latest .
+docker push ghcr.io/my-org/my-api:latest
 
-# GOOD — explicitly target Linux
-dotnet publish /t:PublishContainer --os linux --arch x64
+# GOOD — multi-platform via buildx
+docker buildx build --platform linux/amd64,linux/arm64 --push ...
 ```
 
-### Don't Skip Authentication Before Push
+### Manual Push from Dev Machine
 
 ```bash
-# BAD — fails with CONTAINER1013 error
-dotnet publish /t:PublishContainer -p ContainerRegistry=ghcr.io
+# BAD — image built locally may differ from CI environment
+#       developer secrets may be in the build context
+docker build -t ghcr.io/my-org/my-api:latest .
+docker push ghcr.io/my-org/my-api:latest
 
-# GOOD — authenticate first
-docker login ghcr.io
-dotnet publish /t:PublishContainer -p ContainerRegistry=ghcr.io
-```
-
-### Don't Use SDK Publishing When You Need OS Packages
-
-```xml
-<!-- BAD — SDK container publish cannot run apt-get or install native packages -->
-<!-- There is no RUN equivalent -->
-
-<!-- GOOD — create a custom base image with a Dockerfile first, then reference it -->
-<ContainerBaseImage>myregistry/custom-base:1.0</ContainerBaseImage>
+# GOOD — all publishes go through GitHub Actions using GITHUB_TOKEN
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Standard ASP.NET Core API | SDK container publishing with `noble-chiseled` |
-| Worker service / console app | SDK container publishing (native .NET 10 support) |
-| Needs native OS packages | Dockerfile (or custom base image + SDK publishing) |
-| Azure Functions | Dockerfile (not supported by SDK publishing) |
-| CI without Docker daemon | Tarball output with `ContainerArchiveOutputPath` |
-| Multi-arch deployment (x64 + arm64) | `ContainerRuntimeIdentifiers` property |
-| Production image size | `noble-chiseled` (~110 MB) or Native AOT (~10 MB) |
-| Local development | `dotnet publish /t:PublishContainer --os linux --arch x64` |
-| Registry push | `ContainerRegistry` + `docker login` |
+|---|---|
+| Release on git tag | GitHub Actions with `on: push: tags: v*.*.*` |
+| Traceability without full release | Push SHA-tagged image on merge to main |
+| ARM + AMD64 support | `docker buildx` with `--platform linux/amd64,linux/arm64` |
+| Registry choice | GHCR for GitHub projects (free, GITHUB_TOKEN auth) |
+| Rollback capability | Always push both semver and :latest |
+| Build caching in CI | `cache-from/cache-to: type=gha` in build-push-action |

@@ -39,10 +39,10 @@ if echo "$COMMAND" | grep -qE 'rm\s+-[a-zA-Z]*r[a-zA-Z]*f|rm\s+-[a-zA-Z]*f[a-zA-
   fi
 fi
 
-# ── dotnet run without launch settings check ────────────────────────
+# ── Local app start commands ────────────────────────────────────────
 
-if echo "$COMMAND" | grep -qE 'dotnet\s+run\b'; then
-  echo "WARNING: dotnet run detected. Ensure launchSettings.json exists and the correct profile is selected."
+if echo "$COMMAND" | grep -qE 'npm\s+run\s+(dev|start|start:dev)\b|pnpm\s+(dev|start|start:dev)\b|nest\s+start\b'; then
+  echo "WARNING: local app start command detected. Ensure required env vars and local services are available."
   # Allow but warn — exit 0 so it proceeds
 fi
 

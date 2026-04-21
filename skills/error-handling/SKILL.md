@@ -1,254 +1,247 @@
 ---
 name: error-handling
 description: >
-  Error handling strategy for .NET 10 applications. Covers the Result pattern,
-  ProblemDetails (RFC 9457), global exception handling, FluentValidation, and
-  structured error responses.
-  Load this skill when implementing error handling, validation, or designing
-  API error contracts, or when the user mentions "error handling", "Result pattern",
-  "ProblemDetails", "exception", "validation", "FluentValidation", "error response",
-  "global exception handler", or "RFC 9457".
+  NestJS error handling using HttpException hierarchy, ExceptionFilters,
+  global filter registration, and ProblemDetails-style responses (RFC 9457).
+  Also covers the neverthrow Result pattern for typed domain failure paths.
+  Load this skill when handling errors, writing exception filters, mapping errors
+  to HTTP responses, or when the user mentions "exception", "HttpException",
+  "ExceptionFilter", "NotFoundException", "error response", "ProblemDetails",
+  "400", "404", "500", "try-catch", "Result pattern", or "neverthrow".
 ---
 
-# Error Handling
+# Error Handling (NestJS)
 
 ## Core Principles
 
-1. **Use the Result pattern for expected failures** — Don't throw exceptions for things like "order not found" or "validation failed". These are expected outcomes, not exceptional conditions. See ADR-002.
-2. **Reserve exceptions for unexpected failures** — Database connection lost, null reference bugs, network timeouts — these are truly exceptional and should propagate to the global handler.
-3. **Every API error returns ProblemDetails** — RFC 9457 is the standard. Every error response has `type`, `title`, `status`, `detail`, and optionally `errors`.
-4. **Validate at the boundary** — Validate incoming requests at the API layer, not deep inside business logic.
+1. **HttpException subclasses for expected failures** — `NotFoundException`,
+   `BadRequestException`, `ConflictException`, `UnauthorizedException`, and
+   `ForbiddenException` map directly to the correct HTTP status. Use them.
+2. **Always register a global ExceptionFilter** — Without one, unhandled exceptions
+   leak stack traces and raw Error objects to clients in production.
+3. **Return ProblemDetails format (RFC 9457)** — Consistent error shape across all
+   endpoints; clients can handle errors generically.
+4. **Controllers never catch service exceptions** — Services throw typed exceptions;
+   the global filter handles everything else. No try-catch in controllers.
+5. **neverthrow for explicit multi-path domain failures** — When a service has 3+
+   named failure modes that callers must consciously handle, prefer `Result<T, E>`.
 
 ## Patterns
 
-### Result Pattern
+### Global Exception Filter (ProblemDetails)
 
-A simple, generic result type that carries either a value or errors.
+```typescript
+// common/filters/all-exceptions.filter.ts
+import {
+  ExceptionFilter, Catch, ArgumentsHost,
+  HttpException, HttpStatus, Logger,
+} from '@nestjs/common';
+import { Request, Response } from 'express';
 
-```csharp
-public class Result
-{
-    public bool IsSuccess { get; }
-    public bool IsFailure => !IsSuccess;
-    public List<string> Errors { get; }
+@Catch()
+export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AllExceptionsFilter.name);
 
-    protected Result(bool isSuccess, List<string>? errors = null)
-    {
-        IsSuccess = isSuccess;
-        Errors = errors ?? [];
+  catch(exception: unknown, host: ArgumentsHost): void {
+    const ctx = host.switchToHttp();
+    const res = ctx.getResponse<Response>();
+    const req = ctx.getRequest<Request>();
+
+    const status =
+      exception instanceof HttpException
+        ? exception.getStatus()
+        : HttpStatus.INTERNAL_SERVER_ERROR;
+
+    const message =
+      exception instanceof HttpException
+        ? exception.message
+        : 'Internal server error';
+
+    if (status >= 500) {
+      this.logger.error({ exception, path: req.url }, 'Unhandled exception');
     }
 
-    public static Result Success() => new(true);
-    public static Result Failure(params string[] errors) => new(false, [..errors]);
-    public static Result<T> Success<T>(T value) => new(value);
-    public static Result<T> Failure<T>(params string[] errors) => new(errors);
-}
-
-public class Result<T> : Result
-{
-    public T Value { get; }
-
-    internal Result(T value) : base(true) => Value = value;
-    internal Result(IEnumerable<string> errors) : base(false, [..errors]) => Value = default!;
-}
-```
-
-### Result to ProblemDetails Mapping
-
-```csharp
-public static class ResultExtensions
-{
-    public static IResult ToProblemDetails(this Result result, int statusCode = 400)
-    {
-        return TypedResults.Problem(
-            title: "One or more errors occurred",
-            statusCode: statusCode,
-            extensions: new Dictionary<string, object?>
-            {
-                ["errors"] = result.Errors
-            });
-    }
-}
-
-// Usage in endpoint
-group.MapPost("/", async (CreateOrder.Command command, ISender sender, CancellationToken ct) =>
-{
-    var result = await sender.Send(command, ct);
-    return result.IsSuccess
-        ? TypedResults.Created($"/api/orders/{result.Value.Id}", result.Value)
-        : result.ToProblemDetails();
-});
-```
-
-### Global Exception Handler
-
-Catches unexpected exceptions and converts them to ProblemDetails. For the modern `IExceptionHandler` approach (preferred), see `knowledge/common-infrastructure.md`. The inline lambda below works for simple cases:
-
-```csharp
-// Program.cs
-app.UseExceptionHandler(errorApp =>
-{
-    errorApp.Run(async context =>
-    {
-        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
-        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
-
-        logger.LogError(exception, "Unhandled exception for {Method} {Path}",
-            context.Request.Method, context.Request.Path);
-
-        var problem = new ProblemDetails
-        {
-            Title = "An unexpected error occurred",
-            Status = StatusCodes.Status500InternalServerError,
-            Type = "https://tools.ietf.org/html/rfc9110#section-15.6.1"
-        };
-
-        // Don't leak details in production
-        if (context.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment())
-        {
-            problem.Detail = exception?.Message;
-        }
-
-        context.Response.StatusCode = problem.Status.Value;
-        await context.Response.WriteAsJsonAsync(problem);
+    res.status(status).json({
+      type: `https://httpstatuses.com/${status}`,
+      title: message,
+      status,
+      detail: exception instanceof HttpException
+        ? JSON.stringify(exception.getResponse())
+        : undefined,
+      instance: req.url,
+      timestamp: new Date().toISOString(),
     });
-});
-```
-
-### FluentValidation with Endpoint Filters
-
-```csharp
-// Validator
-public class CreateOrderValidator : AbstractValidator<CreateOrderRequest>
-{
-    public CreateOrderValidator()
-    {
-        RuleFor(x => x.CustomerId)
-            .NotEmpty().WithMessage("Customer ID is required");
-
-        RuleFor(x => x.Items)
-            .NotEmpty().WithMessage("At least one item is required");
-
-        RuleForEach(x => x.Items).ChildRules(item =>
-        {
-            item.RuleFor(x => x.ProductId).NotEmpty();
-            item.RuleFor(x => x.Quantity).GreaterThan(0);
-        });
-    }
+  }
 }
 
-// Generic validation filter
-public class ValidationFilter<TRequest> : IEndpointFilter
-{
-    public async ValueTask<object?> InvokeAsync(
-        EndpointFilterInvocationContext context,
-        EndpointFilterDelegate next)
-    {
-        var validator = context.HttpContext.RequestServices.GetService<IValidator<TRequest>>();
-        if (validator is null)
-            return await next(context);
-
-        var request = context.Arguments.OfType<TRequest>().FirstOrDefault();
-        if (request is null)
-            return await next(context);
-
-        var result = await validator.ValidateAsync(request);
-        if (!result.IsValid)
-        {
-            return TypedResults.ValidationProblem(result.ToDictionary());
-        }
-
-        return await next(context);
-    }
-}
-
-// Registration
-group.MapPost("/", CreateOrder)
-    .AddEndpointFilter<ValidationFilter<CreateOrderRequest>>();
+// main.ts — register globally
+app.useGlobalFilters(new AllExceptionsFilter());
 ```
 
-### Typed Error Results
+### Service Throws, Controller Does Nothing
 
-For richer error handling, use typed error enums or error objects.
+```typescript
+// orders/orders.service.ts
+@Injectable()
+export class OrdersService {
+  constructor(@InjectRepository(Order) private readonly repo: Repository<Order>) {}
 
-```csharp
-public abstract record Error(string Code, string Message);
-public record NotFoundError(string Entity, object Id)
-    : Error("not_found", $"{Entity} with ID {Id} was not found");
-public record ValidationError(string Field, string Message)
-    : Error("validation", Message);
-public record ConflictError(string Message)
-    : Error("conflict", Message);
+  async findById(id: string): Promise<Order> {
+    const order = await this.repo.findOne({ where: { id } });
+    if (!order) throw new NotFoundException(`Order ${id} not found`);
+    return order;
+  }
 
-// Map to HTTP status codes
-public static IResult ToHttpResult(this Error error) => error switch
-{
-    NotFoundError => TypedResults.Problem(title: error.Message, statusCode: 404),
-    ValidationError => TypedResults.Problem(title: error.Message, statusCode: 400),
-    ConflictError => TypedResults.Problem(title: error.Message, statusCode: 409),
-    _ => TypedResults.Problem(title: error.Message, statusCode: 500)
-};
+  async cancel(id: string): Promise<Order> {
+    const order = await this.findById(id);
+    if (order.status === 'shipped') {
+      throw new ConflictException('Cannot cancel a shipped order');
+    }
+    order.status = 'cancelled';
+    return this.repo.save(order);
+  }
+}
+
+// orders/orders.controller.ts — no try/catch anywhere
+@Controller('orders')
+export class OrdersController {
+  constructor(private readonly service: OrdersService) {}
+
+  @Get(':id')
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.findById(id);
+  }
+
+  @Patch(':id/cancel')
+  cancel(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.cancel(id);
+  }
+}
+```
+
+### Validation Error Shape
+
+```typescript
+// main.ts — consistent 400 shape for class-validator errors
+app.useGlobalPipes(
+  new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+    exceptionFactory: (errors) => {
+      const details = errors.map((e) => ({
+        field: e.property,
+        constraints: Object.values(e.constraints ?? {}),
+      }));
+      return new BadRequestException({ message: 'Validation failed', errors: details });
+    },
+  }),
+);
+```
+
+### Result Pattern with neverthrow
+
+Use when a service operation has multiple named, handleable failure modes.
+
+```typescript
+// npm install neverthrow
+import { ok, err, Result } from 'neverthrow';
+
+type PlaceOrderError = 'OUT_OF_STOCK' | 'CUSTOMER_SUSPENDED' | 'DUPLICATE_ORDER';
+
+@Injectable()
+export class OrdersService {
+  async place(dto: CreateOrderDto): Promise<Result<Order, PlaceOrderError>> {
+    const customer = await this.customerRepo.findOne({ where: { id: dto.customerId } });
+    if (customer?.status === 'suspended') return err('CUSTOMER_SUSPENDED');
+
+    const stock = await this.inventoryRepo.findOne({ where: { productId: dto.productId } });
+    if (!stock || stock.quantity < dto.qty) return err('OUT_OF_STOCK');
+
+    return ok(await this.repo.save(this.repo.create(dto)));
+  }
+}
+
+// Controller maps Result errors to HttpExceptions
+@Post()
+async create(@Body() dto: CreateOrderDto) {
+  const result = await this.service.place(dto);
+  if (result.isErr()) {
+    const map: Record<PlaceOrderError, HttpException> = {
+      OUT_OF_STOCK: new ConflictException('Product out of stock'),
+      CUSTOMER_SUSPENDED: new ForbiddenException('Account suspended'),
+      DUPLICATE_ORDER: new ConflictException('Order already exists'),
+    };
+    throw map[result.error];
+  }
+  return result.value;
+}
+```
+
+### Domain-Specific Exception Classes
+
+```typescript
+// common/exceptions/order.exceptions.ts
+export class OrderNotFoundException extends NotFoundException {
+  constructor(id: string) { super(`Order ${id} not found`); }
+}
+
+export class OrderAlreadyShippedException extends ConflictException {
+  constructor(id: string) { super(`Order ${id} is already shipped`); }
+}
 ```
 
 ## Anti-patterns
 
-### Don't Throw Exceptions for Flow Control
+### Don't Catch Exceptions in Controllers
 
-```csharp
-// BAD — exceptions for expected outcomes
-public Order GetOrder(Guid id)
-{
-    var order = db.Orders.Find(id)
-        ?? throw new NotFoundException($"Order {id} not found");
-    return order;
+```typescript
+// BAD — doubles handling, hides context
+@Get(':id')
+async findOne(@Param('id') id: string) {
+  try {
+    return await this.service.findById(id);
+  } catch {
+    throw new NotFoundException('Not found');
+  }
 }
 
-// GOOD — Result pattern
-public Result<Order> GetOrder(Guid id)
-{
-    var order = db.Orders.Find(id);
-    return order is not null
-        ? Result.Success(order)
-        : Result.Failure<Order>($"Order {id} not found");
+// GOOD — service throws, filter catches, controller does nothing
+@Get(':id')
+findOne(@Param('id', ParseUUIDPipe) id: string) {
+  return this.service.findById(id);
 }
 ```
 
-### Don't Return Raw Error Strings from APIs
+### Don't Throw Generic Error from Services
 
-```csharp
-// BAD — inconsistent error format
-return Results.BadRequest("Something went wrong");
-return Results.BadRequest(new { error = "Invalid input" });
+```typescript
+// BAD — becomes an unhandled 500
+throw new Error('Order not found');
 
-// GOOD — always ProblemDetails
-return TypedResults.Problem(title: "Invalid input", statusCode: 400);
-return TypedResults.ValidationProblem(validationResult.ToDictionary());
+// GOOD — typed, correct HTTP status
+throw new NotFoundException(`Order ${id} not found`);
 ```
 
-### Don't Catch and Swallow Exceptions
+### Don't Expose Internals in Error Responses
 
-```csharp
-// BAD — silently swallowing
-try { await ProcessOrder(order); }
-catch (Exception) { /* ignore */ }
+```typescript
+// BAD — stack traces reach clients
+response.status(500).json({ error: exception.stack });
 
-// GOOD — log and handle appropriately
-try { await ProcessOrder(order); }
-catch (PaymentException ex)
-{
-    logger.LogWarning(ex, "Payment failed for order {OrderId}", order.Id);
-    return Result.Failure<Order>("Payment processing failed");
-}
+// GOOD — ProblemDetails, no internal details
+response.status(500).json({ type: '...', title: 'Internal server error', status: 500 });
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Expected business failure | Result pattern |
-| Input validation | FluentValidation with endpoint filter |
-| Unexpected crash | Global exception handler → ProblemDetails |
-| API error format | RFC 9457 ProblemDetails — always |
-| Validation in handler | Return Result.Failure, don't throw |
-| External service failure | Catch specific exception, return Result.Failure |
-| Logging errors | Structured logging with correlation ID |
+|---|---|
+| Resource not found | `throw new NotFoundException(...)` |
+| Invalid input / validation | `ValidationPipe` + `BadRequestException` |
+| Duplicate / state conflict | `throw new ConflictException(...)` |
+| Not authenticated | `throw new UnauthorizedException(...)` |
+| Not authorized | `throw new ForbiddenException(...)` |
+| Multiple named domain failures | `neverthrow` Result pattern |
+| Unexpected crash | Global `AllExceptionsFilter` logs + returns 500 |
+| Semantic domain exception | Custom `HttpException` subclass |

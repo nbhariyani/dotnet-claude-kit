@@ -1,61 +1,46 @@
 #!/usr/bin/env bash
-# Pre-commit hook: detect anti-patterns in staged C# files
-# Runs a quick lint pass on staged .cs files using dotnet build diagnostics.
-# For full anti-pattern detection, use the Roslyn MCP detect_antipatterns tool.
-#
-# Exit codes:
-#   0 — No issues found (or no .cs files staged)
-#   1 — Issues found, commit blocked
-
+# Detect NestJS/TypeScript antipatterns in staged TypeScript files before commit.
 set -euo pipefail
 
-# Get staged .cs files
-STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.cs$' || true)
+# Get staged .ts files (exclude test files for some checks)
+STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.ts$' | grep -v '\.spec\.ts$' | grep -v '\.e2e-spec\.ts$' || true)
 
-if [[ -z "$STAGED_FILES" ]]; then
-    exit 0
+if [ -z "$STAGED_TS" ]; then
+  exit 0
 fi
-
-echo "Checking staged C# files for common issues..."
 
 ERRORS=0
 
-for FILE in $STAGED_FILES; do
-    if [[ ! -f "$FILE" ]]; then
-        continue
-    fi
+for FILE in $STAGED_TS; do
+  [ -f "$FILE" ] || continue
 
-    # Check for DateTime.Now / DateTime.UtcNow (should use TimeProvider)
-    if grep -n 'DateTime\.\(Now\|UtcNow\)' "$FILE" 2>/dev/null; then
-        echo "⚠️  $FILE: Use TimeProvider instead of DateTime.Now/UtcNow"
-        ERRORS=$((ERRORS + 1))
-    fi
+  # console.log / console.error in non-test TS files
+  if grep -nE 'console\.(log|error|warn|debug)\(' "$FILE" 2>/dev/null; then
+    echo "ERROR: console.log found in $FILE — use Logger from @nestjs/common"
+    ERRORS=$((ERRORS + 1))
+  fi
 
-    # Check for new HttpClient() (should use IHttpClientFactory)
-    if grep -n 'new HttpClient()' "$FILE" 2>/dev/null; then
-        echo "⚠️  $FILE: Use IHttpClientFactory instead of new HttpClient()"
-        ERRORS=$((ERRORS + 1))
-    fi
+  # synchronize: true (TypeORM production footgun)
+  if grep -n 'synchronize:\s*true' "$FILE" 2>/dev/null; then
+    echo "ERROR: synchronize: true found in $FILE — use migrations instead"
+    ERRORS=$((ERRORS + 1))
+  fi
 
-    # Check for async void (except event handlers)
-    if grep -n 'async void' "$FILE" | grep -v 'EventArgs' 2>/dev/null; then
-        echo "🔴 $FILE: async void is dangerous — use async Task instead"
-        ERRORS=$((ERRORS + 1))
-    fi
+  # process.env. direct access (should use ConfigService)
+  if grep -nE 'process\.env\.' "$FILE" 2>/dev/null | grep -v '// '; then
+    echo "WARNING: process.env direct access in $FILE — use ConfigService.getOrThrow()"
+  fi
 
-    # Check for .Result or .GetAwaiter().GetResult() (sync-over-async)
-    if grep -n '\.Result\b\|\.GetAwaiter()\.GetResult()' "$FILE" 2>/dev/null; then
-        echo "🔴 $FILE: Avoid sync-over-async (.Result / .GetAwaiter().GetResult())"
-        ERRORS=$((ERRORS + 1))
-    fi
+  # new SomeService() — bypasses DI
+  if grep -nE 'new [A-Z][a-zA-Z]+(Service|Repository|Provider)\(' "$FILE" 2>/dev/null; then
+    echo "WARNING: Direct instantiation in $FILE — use NestJS dependency injection"
+  fi
 done
 
-if [[ $ERRORS -gt 0 ]]; then
-    echo ""
-    echo "Found $ERRORS anti-pattern issue(s) in staged files."
-    echo "Fix the issues above or use 'git commit --no-verify' to skip this check."
-    exit 1
+if [ "$ERRORS" -gt 0 ]; then
+  echo ""
+  echo "Commit blocked: $ERRORS antipattern(s) found. Fix before committing."
+  exit 1
 fi
 
-echo "✓ No anti-patterns detected in staged files."
 exit 0

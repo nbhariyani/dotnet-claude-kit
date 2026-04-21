@@ -1,26 +1,36 @@
 ---
 name: ci-cd
 description: >
-  CI/CD pipelines for .NET applications. Covers GitHub Actions and Azure DevOps
-  YAML pipelines with build, test, publish, and deploy stages.
-  Load this skill when setting up continuous integration, automated testing,
-  deployment workflows, or when the user mentions "CI/CD", "pipeline",
-  "GitHub Actions", "Azure DevOps", "workflow", "deploy", "build pipeline",
-  "publish", "NuGet push", "release", or "continuous integration".
+  GitHub Actions CI/CD pipelines for NestJS. Load this skill when setting up
+  continuous integration, automated testing, GitHub Actions workflows, npm ci,
+  deployment pipelines, or E2E tests in CI with a real database.
 ---
-
-# CI/CD
 
 ## Core Principles
 
-1. **Pipeline as code** — YAML pipelines committed to the repo. No click-ops in the UI.
-2. **Fast feedback** — Build and test on every push. Cache NuGet packages. Fail fast.
-3. **Build once, deploy many** — Build the artifact once, promote it through environments (dev → staging → production).
-4. **Never skip tests** — Tests gate the pipeline. No deployment without passing tests.
+1. **`npm ci` not `npm install` in CI.** `npm ci` installs from the lockfile exactly,
+   is deterministic, and is faster because it skips the dependency resolution step.
+   `npm install` can silently update the lockfile and produce different results
+   between runs.
+
+2. **Cache node_modules between runs.** Use `actions/cache` or the `cache` option on
+   `actions/setup-node`. A cache hit reduces install time from 60s to 5s on most
+   projects.
+
+3. **Run a real database for E2E tests.** Use `services: postgres` in the workflow.
+   SQLite in-memory behaves differently from PostgreSQL (no transactions, no JSON
+   columns, no constraints). Tests that pass on SQLite may fail in production.
+
+4. **Lint before test.** Linting is fast. Catching a lint error before waiting 2
+   minutes for tests to run saves time. Order: lint → unit tests → build → E2E tests.
+
+5. **CD triggers on tag push or workflow_dispatch.** Never auto-deploy on every push
+   to main unless you are doing continuous deployment deliberately. Prefer tag-based
+   releases for production.
 
 ## Patterns
 
-### GitHub Actions — Build + Test
+### CI Workflow (Node.js + PostgreSQL)
 
 ```yaml
 # .github/workflows/ci.yml
@@ -32,72 +42,84 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  DOTNET_VERSION: '10.0.x'
-  DOTNET_NOLOGO: true
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
-
 jobs:
-  build-and-test:
+  ci:
     runs-on: ubuntu-latest
 
     services:
       postgres:
-        image: postgres:17
+        image: postgres:16-alpine
         env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
           POSTGRES_DB: testdb
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
+          --health-interval 5s
+          --health-timeout 3s
           --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+        ports:
+          - 6379:6379
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-node@v4
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+          node-version: '22'
+          cache: 'npm'
 
-      - name: Restore
-        run: dotnet restore
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: npm run build
 
-      - name: Format check
-        run: dotnet format --verify-no-changes --no-restore
-
-      - name: Test
-        run: dotnet test --no-build --configuration Release --logger trx --results-directory TestResults
+      - name: Run migrations
         env:
-          ConnectionStrings__Default: "Host=localhost;Database=testdb;Username=postgres;Password=postgres"
+          DATABASE_URL: postgres://test:test@localhost:5432/testdb
+        run: npm run migration:run
 
-      - name: Publish test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results
-          path: TestResults/*.trx
+      - name: E2E tests
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://test:test@localhost:5432/testdb
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          JWT_SECRET: test-secret-at-least-32-characters-long
+          PORT: 3000
+        run: npm run test:e2e
 ```
 
-### GitHub Actions — Build + Publish Docker Image
+### CD Workflow: Build and Push Container on Tag
 
 ```yaml
-# .github/workflows/publish.yml
-name: Publish
+# .github/workflows/release.yml
+name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*.*.*'
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -106,111 +128,121 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Login to GitHub Container Registry
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
+          target: production
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.VERSION }}
-            ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 ```
 
-### Azure DevOps — Build + Test
+### package.json Scripts for CI
 
-Same restore → build → format → test flow as GitHub Actions. Key differences:
-
-```yaml
-# azure-pipelines.yml
-trigger:
-  branches:
-    include: [main]
-  paths:
-    exclude: ['*.md', docs/]
-
-pool:
-  vmImage: 'ubuntu-latest'          # vs runs-on: ubuntu-latest
-
-variables:
-  dotnetVersion: '10.0.x'
-
-# Key task differences from GitHub Actions:
-#   Setup .NET:  task: UseDotNet@2  (inputs: version: $(dotnetVersion))
-#   Test results: task: PublishTestResults@2  (testResultsFormat: VSTest)
-#   Steps use `script:` + `displayName:` instead of `- name:` + `run:`
-#   Services (e.g., Postgres) require a separate Docker task or pipeline service connection
-```
-
-### NuGet Package Publishing
-
-```yaml
-# Part of GitHub Actions workflow
-- name: Pack
-  run: dotnet pack src/MyLibrary -c Release -o ./nupkg --no-build
-
-- name: Push to NuGet
-  run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
+```json
+{
+  "scripts": {
+    "build": "nest build",
+    "start:dev": "nest start --watch",
+    "test": "jest --passWithNoTests",
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand --forceExit",
+    "test:cov": "jest --coverage",
+    "lint": "eslint \"{src,test}/**/*.ts\" --max-warnings 0",
+    "lint:fix": "eslint \"{src,test}/**/*.ts\" --fix",
+    "migration:run": "typeorm-ts-node-commonjs migration:run -d src/data-source.ts",
+    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/data-source.ts",
+    "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/data-source.ts"
+  }
+}
 ```
 
 ## Anti-patterns
 
-### Don't Build Different Artifacts per Environment
+### npm install Instead of npm ci
 
 ```yaml
-# BAD — building separately for each environment
-- script: dotnet publish -c Debug   # for dev
-- script: dotnet publish -c Release # for prod
+# BAD — resolves dependencies fresh every time; can silently change versions
+- run: npm install
 
-# GOOD — build once, deploy everywhere
-- script: dotnet publish -c Release -o ./publish
-# Then deploy the same ./publish artifact to dev, staging, prod
+# GOOD — deterministic install from lockfile
+- run: npm ci
 ```
 
-### Don't Skip Format Checks in CI
+### No Dependency Caching
 
 ```yaml
-# BAD — no format enforcement
-steps:
-  - run: dotnet build
-  - run: dotnet test
+# BAD — downloads all packages on every run (~60s)
+- uses: actions/setup-node@v4
+  with:
+    node-version: '22'
+- run: npm ci
 
-# GOOD — format check catches style issues early
-steps:
-  - run: dotnet build
-  - run: dotnet format --verify-no-changes
-  - run: dotnet test
+# GOOD — cache:npm restores node_modules from cache on cache hit
+- uses: actions/setup-node@v4
+  with:
+    node-version: '22'
+    cache: 'npm'
+- run: npm ci
 ```
 
-### Don't Hardcode Secrets in Pipelines
+### SQLite for E2E Tests in CI
 
 ```yaml
-# BAD — secret in pipeline YAML
-env:
-  DB_PASSWORD: "my-secret-password"
+# BAD — SQLite ignores FK constraints, lacks JSON types, behaves differently
+DATABASE_URL: sqlite::memory:
 
-# GOOD — use pipeline secrets
-env:
-  DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+# GOOD — real PostgreSQL via services
+services:
+  postgres:
+    image: postgres:16-alpine
+    ...
+```
+
+### No Lint Step
+
+```yaml
+# BAD — lint failures only surface as type errors during build, much later
+- run: npm ci
+- run: npm test
+- run: npm run build
+
+# GOOD — fail fast on lint issues
+- run: npm ci
+- run: npm run lint
+- run: npm test
+- run: npm run build
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Open source project | GitHub Actions |
-| Enterprise with Azure | Azure DevOps Pipelines |
-| Docker deployment | Multi-stage build in CI, push to container registry |
-| NuGet library | Build → Test → Pack → Push on tag |
-| Database migrations | Run in CI test stage, script for production |
-| Environment promotion | Same artifact, different configuration |
+|---|---|
+| PR validation | CI workflow: lint + test + build |
+| E2E with real DB | `services: postgres` in GitHub Actions |
+| Container release | CD workflow triggered by `v*.*.*` tag push |
+| Manual deploy to staging | `workflow_dispatch` trigger on CD workflow |
+| Slow E2E tests | `--runInBand` for isolation; Testcontainers parallel in unit tests |
+| Secrets in CI | GitHub Actions Secrets; never hardcode in workflow YAML |

@@ -1,158 +1,193 @@
 ---
 name: api-versioning
 description: >
-  API versioning strategies for ASP.NET Core. Covers Asp.Versioning library,
-  URL segment, header, and query string strategies, version deprecation, and
-  OpenAPI integration.
-  Load this skill when adding versioning to an API, evolving an API with breaking
-  changes, or when the user mentions "API version", "versioning", "v1/v2",
-  "Asp.Versioning", "deprecation", "breaking change", or "backward compatibility".
+  NestJS API versioning strategies. Load this skill when setting up API versioning,
+  working with @Version decorator, enableVersioning, URI versioning, header versioning,
+  or managing breaking API changes between v1 and v2.
 ---
-
-# API Versioning
 
 ## Core Principles
 
-1. **Version from day one** — Adding versioning later is painful. Start with a version in the URL even if you only have v1.
-2. **URL segment versioning is the default** — `/api/v1/orders` is the most discoverable and cache-friendly strategy.
-3. **Never break existing versions** — Add a new version for breaking changes. Deprecate the old version with a timeline.
-4. **Version the API, not individual endpoints** — All endpoints in a version group share the same version number.
+1. **URI versioning is the most visible and cache-friendly.** `/api/v1/orders` is
+   self-documenting, works with every HTTP client, and is easy to route in a gateway.
+   Use URI versioning as the default unless a specific client constraint demands
+   otherwise.
+
+2. **Set a `defaultVersion` so unversioned routes still work.** Without a
+   `defaultVersion`, requests to `/api/orders` return 404. Setting `defaultVersion: '1'`
+   provides a sensible fallback and eases migration.
+
+3. **Use `VERSION_NEUTRAL` for infrastructure endpoints.** Health checks, metrics,
+   and root metadata endpoints do not belong to any version. `VERSION_NEUTRAL` keeps
+   them accessible at `/api/health` regardless of versioning config.
+
+4. **Never delete an old version without a deprecation period.** Clients break silently
+   when an API version disappears. Mark old versions as deprecated (via a response
+   header or documentation note) and provide a migration timeline before removal.
+
+5. **Version at the controller level; override at the handler level when needed.**
+   A controller-level `@Controller({ version: '1' })` covers all its handlers. Use
+   `@Version('2')` on a single handler to add a new behavior without duplicating the
+   entire controller.
 
 ## Patterns
 
-### Setup with Asp.Versioning
+### Enable URI Versioning in main.ts
 
-```csharp
-// Program.cs
-builder.Services.AddApiVersioning(options =>
-{
-    options.DefaultApiVersion = new ApiVersion(1, 0);
-    options.AssumeDefaultVersionWhenUnspecified = true;
-    options.ReportApiVersions = true;
-    options.ApiVersionReader = new UrlSegmentApiVersionReader();
-})
-.AddApiExplorer(options =>
-{
-    options.GroupNameFormat = "'v'VVV";
-    options.SubstituteApiVersionInUrl = true;
+```typescript
+// src/main.ts
+import { VersioningType } from '@nestjs/common';
+
+const app = await NestFactory.create(AppModule);
+app.setGlobalPrefix('api');
+app.enableVersioning({
+  type: VersioningType.URI,
+  defaultVersion: '1',
 });
+await app.listen(config.getOrThrow('PORT'));
 ```
 
-### URL Segment Versioning (Recommended)
+Routes produced:
+- `GET /api/v1/orders` — versioned
+- `GET /api/orders` — resolves to v1 via defaultVersion
 
-```csharp
-var v1 = app.NewApiVersionSet()
-    .HasApiVersion(new ApiVersion(1, 0))
-    .Build();
+### Controller-Level Versioning
 
-var v2 = app.NewApiVersionSet()
-    .HasApiVersion(new ApiVersion(2, 0))
-    .Build();
+```typescript
+// src/orders/orders.controller.ts
+import { Controller, Get, Version } from '@nestjs/common';
 
-app.MapGroup("/api/v{version:apiVersion}/orders")
-    .WithApiVersionSet(v1)
-    .WithTags("Orders")
-    .MapOrderEndpointsV1();
+@Controller({ version: '1', path: 'orders' })
+export class OrdersV1Controller {
+  constructor(private readonly ordersService: OrdersService) {}
 
-app.MapGroup("/api/v{version:apiVersion}/orders")
-    .WithApiVersionSet(v2)
-    .WithTags("Orders")
-    .MapOrderEndpointsV2();
+  @Get()
+  findAll() {
+    return this.ordersService.findAll();
+  }
+}
+```
+
+### Per-Handler Version Override
+
+```typescript
+// Single controller serves both v1 and v2 of different handlers
+@Controller({ version: '1', path: 'orders' })
+export class OrdersController {
+  @Get()
+  findAll() {
+    // v1 response shape
+    return this.ordersService.findAll();
+  }
+
+  // Override to v2 for a single endpoint
+  @Get(':id')
+  @Version('2')
+  findOneV2(@Param('id', ParseUUIDPipe) id: string) {
+    // v2 response with additional fields
+    return this.ordersService.findByIdWithDetails(id);
+  }
+}
+```
+
+### VERSION_NEUTRAL for Infrastructure Routes
+
+```typescript
+import { Controller, Get, VERSION_NEUTRAL } from '@nestjs/common';
+import { HealthCheck, HealthCheckService, TypeOrmHealthIndicator } from '@nestjs/terminus';
+
+@Controller({ version: VERSION_NEUTRAL, path: 'health' })
+export class HealthController {
+  constructor(
+    private readonly health: HealthCheckService,
+    private readonly db: TypeOrmHealthIndicator,
+  ) {}
+
+  @Get()
+  @HealthCheck()
+  check() {
+    return this.health.check([
+      () => this.db.pingCheck('database'),
+    ]);
+  }
+}
+// Route: GET /api/health  (no version prefix)
 ```
 
 ### Header Versioning (Alternative)
 
-```csharp
-options.ApiVersionReader = new HeaderApiVersionReader("X-Api-Version");
-
-// Client sends: X-Api-Version: 2.0
+```typescript
+// main.ts — use Accept-Version header instead of URI segment
+app.enableVersioning({
+  type: VersioningType.HEADER,
+  header: 'Accept-Version',
+});
+// Client sends: Accept-Version: 2
 ```
 
-### Deprecating a Version
+### Deprecation Response Header
 
-```csharp
-var v1 = app.NewApiVersionSet()
-    .HasDeprecatedApiVersion(new ApiVersion(1, 0))
-    .HasApiVersion(new ApiVersion(2, 0))
-    .Build();
-
-// Response headers will include: api-deprecated-versions: 1.0
-```
-
-### Version-Specific Endpoint Groups
-
-```csharp
-public static class OrderEndpointsV1
-{
-    public static RouteGroupBuilder MapOrderEndpointsV1(this RouteGroupBuilder group)
-    {
-        group.MapGet("/{id:guid}", GetOrderV1);
-        group.MapPost("/", CreateOrderV1);
-        return group;
-    }
-
-    private static async Task<Results<Ok<OrderResponseV1>, NotFound>> GetOrderV1(
-        Guid id, ISender sender, CancellationToken ct)
-    {
-        // V1 response shape
-        var result = await sender.Send(new GetOrder.Query(id), ct);
-        return result.IsSuccess
-            ? TypedResults.Ok(result.Value.ToV1())
-            : TypedResults.NotFound();
-    }
+```typescript
+// Interceptor to signal deprecated API version
+@Injectable()
+export class DeprecationInterceptor implements NestInterceptor {
+  intercept(ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const res = ctx.switchToHttp().getResponse<Response>();
+    res.setHeader('Deprecation', 'true');
+    res.setHeader('Sunset', 'Sat, 01 Jan 2026 00:00:00 GMT');
+    return next.handle();
+  }
 }
 
-public static class OrderEndpointsV2
-{
-    public static RouteGroupBuilder MapOrderEndpointsV2(this RouteGroupBuilder group)
-    {
-        group.MapGet("/{id:guid}", GetOrderV2);
-        group.MapPost("/", CreateOrderV2);
-        return group;
-    }
-
-    private static async Task<Results<Ok<OrderResponseV2>, NotFound>> GetOrderV2(
-        Guid id, ISender sender, CancellationToken ct)
-    {
-        // V2 response shape — includes new fields
-        var result = await sender.Send(new GetOrder.Query(id), ct);
-        return result.IsSuccess
-            ? TypedResults.Ok(result.Value.ToV2())
-            : TypedResults.NotFound();
-    }
-}
+// Apply to deprecated v1 controller
+@UseInterceptors(DeprecationInterceptor)
+@Controller({ version: '1', path: 'orders' })
+export class OrdersV1Controller { ... }
 ```
 
 ## Anti-patterns
 
-### Don't Version Individual Endpoints
+### Manual Versioning in Route String
 
-```csharp
-// BAD — inconsistent versioning within a group
-app.MapGet("/api/v1/orders", ListOrdersV1);
-app.MapGet("/api/v2/orders/{id}", GetOrderV2); // V2 only for this endpoint?
+```typescript
+// BAD — hardcoded prefix in path; NestJS versioning features don't apply
+@Controller('v1/orders')
+export class OrdersController { ... }
 
-// GOOD — version the entire group
-app.MapGroup("/api/v1/orders").MapOrderEndpointsV1();
-app.MapGroup("/api/v2/orders").MapOrderEndpointsV2();
+// GOOD — NestJS handles the prefix
+@Controller({ version: '1', path: 'orders' })
+export class OrdersController { ... }
 ```
 
-### Don't Use Query String Versioning as Default
+### No defaultVersion (Unversioned 404)
 
-```csharp
-// BAD for REST APIs — version hidden in query string, not cache-friendly
-GET /api/orders?api-version=2.0
+```typescript
+// BAD — /api/orders returns 404 because there is no defaultVersion
+app.enableVersioning({ type: VersioningType.URI });
 
-// GOOD — version in URL, discoverable and cacheable
-GET /api/v2/orders
+// GOOD
+app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+```
+
+### Deleting Old Versions Without Deprecation Period
+
+```typescript
+// BAD — v1 removed; existing clients receive 404 with no warning
+
+// GOOD — deprecate first, set a Sunset date, then remove after the deadline
+@UseInterceptors(DeprecationInterceptor)
+@Controller({ version: '1', path: 'orders' })
+export class OrdersV1Controller { /* still functional */ }
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| New public API | URL segment versioning from day one |
-| Internal API between services | Header versioning (cleaner URLs) |
-| Breaking response shape change | New version |
-| Adding new optional fields | Same version (backwards compatible) |
-| Deprecating a version | Mark deprecated, set sunset date, document migration path |
+|---|---|
+| Default versioning strategy | URI versioning with `defaultVersion: '1'` |
+| Clients use browser/simple curl | URI versioning (`/v1/`, `/v2/`) |
+| API gateway controls version routing | Header versioning |
+| Health / metrics / root | `VERSION_NEUTRAL` |
+| Breaking change in one endpoint only | `@Version('2')` on that handler, keep v1 |
+| Full resource redesign | New `OrdersV2Controller` with `version: '2'` |
+| Retiring an old version | Add `DeprecationInterceptor`, announce Sunset date |

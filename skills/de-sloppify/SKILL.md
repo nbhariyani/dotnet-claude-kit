@@ -1,277 +1,192 @@
 ---
 name: de-sloppify
 description: >
-  Systematic code cleanup pipeline for .NET projects. Runs 7 ordered steps:
-  formatting, unused usings, analyzer warnings, dead code removal, TODO resolution,
-  sealed class audit, and CancellationToken propagation. Each step is verified
-  independently with tests between phases. Load this skill when: "clean up",
-  "de-sloppify", "tidy up", "remove dead code", "code cleanup", "housekeeping",
-  "tech debt", "fix warnings", "seal classes", "add CancellationToken",
-  "unused usings", "format code".
+  Code quality cleanup workflow for NestJS projects. Load this skill when asked
+  to clean up code, de-sloppify, improve code quality, remove dead code, fix unused
+  imports, resolve stale TODOs, or detect circular dependencies.
 ---
-
-# De-Sloppify
 
 ## Core Principles
 
-1. **Systematic over random** — Follow the cleanup pipeline in order. Formatting first (because it touches every file), dead code last (because earlier steps might reveal it). Random cleanup misses things and creates merge conflicts.
+1. **Work in committed steps.** Each cleanup step is a separate commit. This makes
+   it easy to bisect if a cleanup accidentally broke something.
 
-2. **Verify after each step** — Run `dotnet build` and `dotnet test` after every step. A cleanup that breaks something is worse than the mess it was fixing. Never batch multiple cleanup types into one untested change.
+2. **Automated fixes first, manual last.** Run lint:fix and format before any manual
+   changes. Manual cleanup of already-auto-fixable issues wastes time.
 
-3. **Safe removals only** — Before removing any code flagged as "dead," verify it isn't used via reflection, DI conventions, or serialization. `find_references` shows compile-time usage; grep for string-based references that Roslyn cannot track.
+3. **Dead code is technical debt.** Unused exports, unused variables, and unreachable
+   code all increase cognitive load for the next developer and the context window
+   for AI tools.
 
-4. **One concern at a time** — Don't mix formatting fixes with logic changes. Don't combine dead code removal with new feature work. Separate concerns make code review possible and reverts safe.
+4. **Circular dependencies are architecture bugs.** They indicate that module
+   boundaries are wrong. Fix the architecture; do not patch with `forwardRef()`.
 
-5. **Commit between phases** — Each cleanup step gets its own commit. If Step 4 (dead code removal) breaks something, revert just that commit without losing the formatting and analyzer fixes from Steps 1-3.
+5. **Never silence a lint rule without a written justification.** `eslint-disable`
+   without a comment is a code smell. If the rule is wrong for a specific case,
+   document why.
 
 ## Patterns
 
-### 7-Step Cleanup Pipeline
+### Full De-Sloppify Sequence (Run in Order)
 
-Execute in order. Verify (build + test) after each step. Commit each step separately.
-
-**Step 1: Format All Code**
+**Step 1: Auto-fix lint and formatting**
 ```bash
-dotnet format
+npm run lint:fix
+npm run format    # or npx prettier --write "src/**/*.ts"
+git add -p
+git commit -m "chore: auto-fix lint and format"
 ```
-Why first: Formatting touches many files. Getting it out of the way prevents merge conflicts with subsequent steps. After this step, every file has consistent style.
 
-Verify: `dotnet format --verify-no-changes` should report no changes.
-Commit: `chore: apply dotnet format`
-
-**Step 2: Remove Unused Usings**
+**Step 2: Remove unused imports**
 ```bash
-dotnet format analyzers --diagnostics IDE0005
-```
-Why second: Unused usings are noise. Removing them makes subsequent analysis cleaner and reduces false positives in code review.
-
-Verify: `dotnet build` should show no new errors. Run `dotnet test` if usings removal is extensive.
-Commit: `chore: remove unused using statements`
-
-**Step 3: Fix Analyzer Warnings**
-```
-MCP: get_diagnostics(scope: "solution", severityFilter: "warning")
-```
-Triage warnings by category:
-- **Nullability warnings (CS8600-CS8604)** — Add null checks or use the null-forgiving operator with a comment explaining why null is impossible.
-- **Unused variables (CS0219)** — Remove them.
-- **Obsolete API usage (CS0618)** — Migrate to the recommended replacement.
-- **IDE suggestions (IDE0xxx)** — Apply if they improve readability.
-
-Fix in priority order: compiler warnings first, then analyzer suggestions.
-Verify: `dotnet build` with zero new warnings. `dotnet test` passes.
-Commit: `chore: fix analyzer warnings`
-
-**Step 4: Remove Dead Code**
-```
-MCP: find_dead_code(scope: "solution", kind: "all")
-```
-For each result, perform a safety check before removing:
-
-```
-SAFETY CHECK BEFORE REMOVAL:
-1. find_references(symbolName: "DeadType") — confirm zero compile-time references
-2. Grep for string-based usage:
-   - "nameof(DeadType)" — sometimes used in attributes or logging
-   - Reflection: Type.GetType("DeadType"), Activator.CreateInstance
-   - DI registration: services.AddScoped(typeof(IHandler<>), typeof(DeadType))
-   - Serialization: [JsonDerivedType(typeof(DeadType))]
-3. Check if it's a public API consumed by external packages
-4. Check if it's referenced in configuration files (appsettings.json, etc.)
-
-ONLY remove if all checks come back clean.
+# ESLint rule @typescript-eslint/no-unused-vars catches most
+# Also check: @typescript-eslint/no-unused-imports (if configured)
+npm run lint
+# Fix any remaining unused import warnings manually
+git add -p
+git commit -m "chore: remove unused imports"
 ```
 
-Verify: `dotnet build` and `dotnet test` pass.
-Commit: `chore: remove dead code`
-
-**Step 5: Resolve TODOs**
+**Step 3: Fix remaining lint warnings (manual)**
 ```bash
-# Find all TODOs in the codebase
-grep -rn "TODO\|HACK\|FIXME\|XXX" --include="*.cs"
-```
-For each TODO, decide:
-- **Fix it now** — If it's small and self-contained, resolve it in this cleanup pass.
-- **Create an issue** — If it requires significant work, create a GitHub issue and update the TODO with the issue number: `// TODO(#142): Implement retry logic`
-- **Remove it** — If it's stale (the work was already done or is no longer relevant), delete the comment.
-
-Verify: `dotnet build` and `dotnet test` pass.
-Commit: `chore: resolve TODO comments`
-
-**Step 6: Seal Non-Inherited Classes**
-```
-MCP: find_dead_code(scope: "solution", kind: "type") — for a list of types
-MCP: get_type_hierarchy(typeName: "EachClass") — check for derived types
-```
-Add `sealed` to every class that:
-- Has no derived types (confirmed via `get_type_hierarchy`)
-- Is not a base class by design (no `virtual` or `abstract` members)
-- Is not used as an open generic in DI registration
-- Is not a test fixture base class
-
-Why seal: Sealed classes enable compiler optimizations (devirtualization), communicate design intent ("this class is not meant to be extended"), and prevent accidental inheritance.
-
-```csharp
-// BEFORE
-public class OrderValidator : AbstractValidator<CreateOrderCommand>
-{
-    public OrderValidator()
-    {
-        RuleFor(x => x.CustomerId).NotEmpty();
-    }
-}
-
-// AFTER — sealed, because nothing inherits from it
-public sealed class OrderValidator : AbstractValidator<CreateOrderCommand>
-{
-    public OrderValidator()
-    {
-        RuleFor(x => x.CustomerId).NotEmpty();
-    }
-}
+npm run lint
+# Address any warnings that lint:fix could not auto-resolve
+# Common: explicit return types, unnecessary type assertions, any usage
+git add -p
+git commit -m "chore: resolve lint warnings"
 ```
 
-Skip sealing:
-- Classes with `virtual` members designed for override
-- Classes used as `IClassFixture<T>` in tests (xUnit requires non-sealed)
-- Base classes in a hierarchy (`Entity<T>`, `AggregateRoot`, etc.)
-
-Verify: `dotnet build` and `dotnet test` pass.
-Commit: `chore: seal non-inherited classes`
-
-**Step 7: Propagate CancellationToken**
+**Step 4: Find dead code (MCP)**
 ```
-MCP: detect_antipatterns(severity: "warning") — filter for "missing CancellationToken"
+find_dead_code({ path: "src/" })
 ```
-Trace the async call chain from entry points (endpoints, handlers) through services to data access (DbContext, HttpClient). Ensure `CancellationToken` flows through every layer.
-
-```csharp
-// BEFORE — CancellationToken stops at the endpoint
-app.MapGet("/orders/{id}", async (Guid id, AppDbContext db) =>
-{
-    var order = await db.Orders.FindAsync(id);
-    return order is not null ? Results.Ok(order) : Results.NotFound();
-});
-
-// AFTER — CancellationToken propagated to EF Core
-app.MapGet("/orders/{id}", async (Guid id, AppDbContext db, CancellationToken ct) =>
-{
-    var order = await db.Orders.FindAsync([id], ct);
-    return order is not null ? Results.Ok(order) : Results.NotFound();
-});
+Remove any exported functions, classes, or modules that have no callers.
+```bash
+git add -p
+git commit -m "chore: remove dead code"
 ```
 
-Common propagation points:
-- Minimal API endpoints: add `CancellationToken ct` parameter (auto-bound by ASP.NET Core)
-- Mediator/MediatR handlers: already provided in `Handle(TRequest, CancellationToken)`
-- EF Core: `SaveChangesAsync(ct)`, `ToListAsync(ct)`, `FindAsync([key], ct)`
-- HttpClient: `GetAsync(url, ct)`, `PostAsync(url, content, ct)`
+**Step 5: Resolve or remove stale TODOs**
+```bash
+# Find all TODOs
+grep -r "TODO\|FIXME\|HACK\|XXX" src/ --include="*.ts"
+```
+For each TODO:
+- If it is resolved by recent work: delete the comment.
+- If it is still needed: convert to a GitHub issue, replace comment with issue link.
+- If it is no longer relevant: delete it.
+```bash
+git add -p
+git commit -m "chore: resolve stale TODOs"
+```
 
-Verify: `dotnet build` and `dotnet test` pass.
-Commit: `chore: propagate CancellationToken through async chains`
+**Step 6: Detect circular dependencies (MCP)**
+```
+detect_circular_deps({ path: "src/" })
+```
+If circular deps are found:
+- Identify the shared concern causing the cycle.
+- Extract it into a new module or move it to `common/`.
+- Do not patch with `forwardRef()` unless it is truly unavoidable (e.g., self-referential entity).
+```bash
+git add -p
+git commit -m "refactor: break circular dependency in <module>"
+```
 
-### Cleanup Summary Report
+**Step 7: Find missing await / async anti-patterns (MCP)**
+```
+detect_antipatterns({ path: "src/", patterns: ["missing-await", "sync-over-async"] })
+```
+Fix each finding individually. A missing `await` in a service is a bug, not just style.
+```bash
+git add -p
+git commit -m "fix: add missing await in <service>"
+```
 
-After completing all steps, produce a summary:
+### ESLint Config for Catching Slop
 
-```markdown
-## De-Sloppify Report
+```javascript
+// eslint.config.js (or .eslintrc.js) — rules that catch common slop
+module.exports = {
+  rules: {
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    '@typescript-eslint/no-explicit-any': 'warn',
+    '@typescript-eslint/explicit-function-return-type': 'warn',
+    '@typescript-eslint/no-floating-promises': 'error',
+    '@typescript-eslint/require-await': 'error',
+    'no-console': 'error',
+  },
+};
+```
 
-| Step | Changes | Files Affected |
-|------|---------|----------------|
-| 1. Format | Applied consistent formatting | 23 files |
-| 2. Usings | Removed 47 unused usings | 18 files |
-| 3. Analyzers | Fixed 12 warnings (8 nullability, 3 unused vars, 1 obsolete) | 9 files |
-| 4. Dead Code | Removed 3 unused types, 5 unused methods | 6 files |
-| 5. TODOs | Fixed 2, created issues for 3, removed 1 stale | 5 files |
-| 6. Sealed | Sealed 14 classes | 14 files |
-| 7. CancellationToken | Added propagation to 8 async chains | 11 files |
+### Cleaning Up an Overgrown AppModule
 
-**Total: 7 commits, 86 files improved**
+```typescript
+// BAD — AppModule is a dumping ground
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([Order, User, Product, Payment, Notification]),
+    // 20 more feature modules inlined here
+  ],
+  providers: [OrdersService, UsersService, /* ... all services */],
+})
+export class AppModule {}
+
+// GOOD — AppModule only imports feature modules
+@Module({
+  imports: [
+    DatabaseModule,
+    OrdersModule,
+    UsersModule,
+    ProductsModule,
+    PaymentsModule,
+  ],
+})
+export class AppModule {}
 ```
 
 ## Anti-patterns
 
-### Mixing Cleanup with Feature Work
+### Silencing ESLint Rules Without Justification
 
-```
-# BAD — one commit with formatting + new feature + dead code removal
-git commit -m "Add order validation and clean up code"
-# Impossible to review, impossible to revert the cleanup without losing the feature
+```typescript
+// BAD
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const result: any = compute();
 
-# GOOD — separate commits, separate concerns
-git commit -m "chore: apply dotnet format"
-git commit -m "chore: remove dead code"
-git commit -m "feat: add order validation"
-```
-
-### Removing Code Without Checking Reflection
-
-```
-# BAD — find_dead_code says it's unused, so delete it
-MCP: find_dead_code → "PaymentProcessor has 0 references"
-*Deletes PaymentProcessor*
-# Runtime crash: DI container can't resolve IPaymentProcessor
-# It was registered via: services.AddScoped(typeof(IPaymentProcessor), typeof(PaymentProcessor))
-
-# GOOD — safety check before removal
-MCP: find_dead_code → "PaymentProcessor has 0 references"
-MCP: find_references(symbolName: "PaymentProcessor") → 0 compile-time refs
-Grep: "PaymentProcessor" in *.cs, *.json → Found in DI registration
-*Keep PaymentProcessor — it's used via DI convention*
+// GOOD — fix the type, or document why any is unavoidable
+const result: ComputeResult = compute();
+// or when truly unavoidable:
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- third-party lib returns untyped response
+const result: any = thirdPartyLib.compute();
 ```
 
-### Sealing Classes That Tests Mock
+### Skipping Steps 4-7
 
 ```
-# BAD — sealing a class that tests inherit from
-public sealed class OrderService { ... }
-// Test project: class MockOrderService : OrderService { ... } — COMPILE ERROR
-
-# GOOD — check for test doubles before sealing
-MCP: get_type_hierarchy(typeName: "OrderService") → no derived types in production
-Grep: "OrderService" in test projects → no inheritance, only usage via interface
-*Safe to seal — tests use IOrderService, not OrderService directly*
+// BAD — stop after lint:fix and call it done
+// Steps 4-7 catch bugs and architectural issues that lint cannot find.
+// A project with clean lint but circular deps and missing awaits is still sloppy.
 ```
 
-### Batch-Committing All Cleanup
+### All Steps in One Commit
 
-```
-# BAD — one giant commit with all 7 steps
-git add -A && git commit -m "chore: cleanup everything"
-# If sealing a class broke a test, you have to revert ALL cleanup to fix it
+```bash
+# BAD — one giant commit; hard to bisect if cleanup broke something
+git add .
+git commit -m "chore: clean up code"
 
-# GOOD — commit per step with verification between
-Step 1 → verify → commit
-Step 2 → verify → commit
-...
-# If Step 6 (sealed) breaks something, revert only that commit
-```
-
-### Running Cleanup Without Tests
-
-```
-# BAD — "it's just formatting and dead code, what could go wrong?"
-dotnet format → commit (no test run)
-Remove dead code → commit (no test run)
-# Dead code was actually used by a test helper via reflection — tests broken
-
-# GOOD — verify after every step
-dotnet format → dotnet test → commit
-Remove dead code → dotnet test → commit
+# GOOD — one commit per step (see sequence above)
 ```
 
 ## Decision Guide
 
-| Scenario | Steps to Run | Notes |
-|----------|-------------|-------|
-| Full cleanup pass | All 7 | Dedicate a session to cleanup only |
-| Quick tidy before PR | 1, 2, 6 | Format, usings, format check |
-| After large feature merge | 1, 2, 3, 4 | Clean up accumulated mess |
-| Quarterly maintenance | All 7 | Schedule regular cleanup sprints |
-| New team member onboarding | 1, 2, 3 | Get the codebase to a clean baseline |
-| Before performance work | 4, 6 | Remove dead code, seal classes for devirtualization |
-| After dependency upgrade | 2, 3 | Fix new analyzer warnings from updated packages |
-| Pre-release hardening | All 7 | Full cleanup before a release |
-| CI warning threshold exceeded | 3 | Focus on analyzer warnings only |
-| Tech debt sprint | 4, 5 | Dead code and TODO resolution |
+| Scenario | Recommendation |
+|---|---|
+| Quick cleanup after feature | Steps 1-3 only |
+| Pre-PR quality check | Full 7-step sequence |
+| Circular dependency detected | Extract shared code; avoid forwardRef() |
+| TODO older than 30 days | Convert to GitHub issue or delete |
+| Missing await in service | Fix immediately — it is a correctness bug |
+| Large file (300+ lines) | Consider splitting into smaller focused files |
+| Unused exported function | Delete it; if it is a public API, deprecate first |

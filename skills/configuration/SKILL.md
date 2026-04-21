@@ -1,197 +1,225 @@
 ---
 name: configuration
 description: >
-  Configuration patterns for .NET 10 applications. Covers the Options pattern,
-  IOptionsSnapshot vs IOptions, secrets management, and environment-based
-  configuration.
-  Load this skill when setting up application configuration, managing secrets,
-  binding configuration sections, or when the user mentions "configuration",
-  "appsettings", "Options pattern", "IOptions", "IOptionsSnapshot", "secrets",
-  "user secrets", "environment variables", "connection string", or "config binding".
+  NestJS configuration management with @nestjs/config, ConfigService, and Joi.
+  Load this skill when working with environment variables, .env files, ConfigModule,
+  registerAs typed sub-config, startup validation, or replacing process.env access.
 ---
-
-# Configuration
 
 ## Core Principles
 
-1. **Options pattern always** — Never read `IConfiguration` directly in services. Bind configuration sections to strongly-typed classes with validation.
-2. **Validate on startup** — Use `ValidateDataAnnotations()` and `ValidateOnStart()` to catch misconfiguration before the first request.
-3. **Secrets never in source** — Use user secrets in development, Azure Key Vault or environment variables in production. Never commit secrets to git.
-4. **Configuration layering** — `appsettings.json` → `appsettings.{Environment}.json` → environment variables → user secrets. Later sources override earlier ones.
+1. **Validate the environment at startup.** A Joi `validationSchema` in
+   `ConfigModule.forRoot` causes the application to throw with a clear message if
+   required variables are missing or have wrong types. Silent undefined values at
+   runtime are harder to debug.
+
+2. **`ConfigService.getOrThrow()` over `.get()` for required values.** `.get()` can
+   return `undefined` if the key is missing. `.getOrThrow()` throws immediately with
+   the key name, making the failure explicit.
+
+3. **`registerAs` for typed, namespaced sub-configs.** Group related variables under
+   a namespace (`database`, `jwt`, `redis`). Consuming code injects a typed sub-config
+   rather than calling `config.get('DATABASE_URL')` with magic strings scattered
+   everywhere.
+
+4. **`process.env` only inside `registerAs` factories.** The config factory is the
+   single allowed place to access `process.env`. All other code uses `ConfigService`.
+
+5. **Commit `.env.example`, never `.env`.** `.env` holds real secrets. `.env.example`
+   is the contract — it documents what variables are required without exposing values.
 
 ## Patterns
 
-### Options Pattern
+### ConfigModule.forRoot with Joi Validation
 
-```csharp
-// Options class with validation attributes
-public class DatabaseOptions
-{
-    public const string SectionName = "Database";
+```typescript
+// src/app.module.ts
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import * as Joi from 'joi';
+import { databaseConfig } from './config/database.config';
+import { jwtConfig } from './config/jwt.config';
+import { redisConfig } from './config/redis.config';
 
-    [Required]
-    public required string ConnectionString { get; init; }
-
-    [Range(1, 100)]
-    public int MaxRetryCount { get; init; } = 3;
-
-    [Range(1, 60)]
-    public int CommandTimeoutSeconds { get; init; } = 30;
-}
-
-// Registration with validation
-builder.Services.AddOptions<DatabaseOptions>()
-    .BindConfiguration(DatabaseOptions.SectionName)
-    .ValidateDataAnnotations()
-    .ValidateOnStart(); // Fails at startup if configuration is invalid
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: [`.env.${process.env['NODE_ENV']}`, '.env'],
+      load: [databaseConfig, jwtConfig, redisConfig],
+      validationSchema: Joi.object({
+        NODE_ENV: Joi.string()
+          .valid('development', 'production', 'test')
+          .default('development'),
+        PORT: Joi.number().integer().min(1).max(65535).default(3000),
+        APP_NAME: Joi.string().required(),
+        DATABASE_URL: Joi.string().uri().required(),
+        JWT_SECRET: Joi.string().min(32).required(),
+        JWT_EXPIRES_IN: Joi.string().default('1h'),
+        REDIS_HOST: Joi.string().hostname().required(),
+        REDIS_PORT: Joi.number().integer().default(6379),
+        ALLOWED_ORIGINS: Joi.string().required(),
+      }),
+      validationOptions: { abortEarly: true },
+    }),
+  ],
+})
+export class AppModule {}
 ```
 
-```json
-// appsettings.json
-{
-  "Database": {
-    "ConnectionString": "",
-    "MaxRetryCount": 3,
-    "CommandTimeoutSeconds": 30
+### Typed Sub-Config with registerAs
+
+```typescript
+// src/config/database.config.ts
+import { registerAs } from '@nestjs/config';
+
+export interface DatabaseConfig {
+  url: string;
+  poolSize: number;
+  ssl: boolean;
+  logging: boolean;
+}
+
+export const databaseConfig = registerAs('database', (): DatabaseConfig => ({
+  url: process.env['DATABASE_URL'] as string,
+  poolSize: parseInt(process.env['DB_POOL_SIZE'] ?? '10', 10),
+  ssl: process.env['NODE_ENV'] === 'production',
+  logging: process.env['NODE_ENV'] === 'development',
+}));
+
+// src/config/jwt.config.ts
+export const jwtConfig = registerAs('jwt', () => ({
+  secret: process.env['JWT_SECRET'] as string,
+  expiresIn: process.env['JWT_EXPIRES_IN'] ?? '1h',
+}));
+```
+
+### ConfigService Usage in a Module
+
+```typescript
+// src/database/database.module.ts
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import { DatabaseConfig } from '../config/database.config';
+
+@Module({
+  imports: [
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const db = config.getOrThrow<DatabaseConfig>('database');
+        return {
+          type: 'postgres',
+          url: db.url,
+          extra: { max: db.poolSize },
+          ssl: db.ssl ? { rejectUnauthorized: true } : false,
+          logging: db.logging,
+          entities: [__dirname + '/../**/*.entity{.ts,.js}'],
+          migrations: [__dirname + '/../migrations/*{.ts,.js}'],
+          synchronize: false,
+        };
+      },
+    }),
+  ],
+})
+export class DatabaseModule {}
+```
+
+### ConfigService Usage in a Service
+
+```typescript
+// src/auth/auth.service.ts
+import { Injectable } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly config: ConfigService,
+  ) {}
+
+  generateToken(userId: string): string {
+    return this.jwtService.sign(
+      { sub: userId },
+      {
+        secret: this.config.getOrThrow<string>('jwt.secret'),
+        expiresIn: this.config.getOrThrow<string>('jwt.expiresIn'),
+      },
+    );
   }
 }
 ```
 
-### Injecting Options
+### .env.example
 
-```csharp
-// IOptions<T> — singleton, read once at startup, doesn't change
-public class OrderService(IOptions<DatabaseOptions> options)
-{
-    private readonly DatabaseOptions _db = options.Value;
-}
-
-// IOptionsSnapshot<T> — scoped, re-reads per request (for reloadable config)
-public class OrderService(IOptionsSnapshot<DatabaseOptions> options)
-{
-    private readonly DatabaseOptions _db = options.Value;
-}
-
-// IOptionsMonitor<T> — singleton, actively watches for changes
-public class BackgroundWorker(IOptionsMonitor<WorkerOptions> options)
-{
-    public void DoWork()
-    {
-        var current = options.CurrentValue; // Always latest
-    }
-}
-```
-
-### Custom Validation (Complex Rules)
-
-```csharp
-builder.Services.AddOptions<JwtOptions>()
-    .BindConfiguration("Jwt")
-    .Validate(options =>
-    {
-        if (string.IsNullOrEmpty(options.Key) || options.Key.Length < 32)
-            return false;
-        if (options.ExpirationMinutes <= 0)
-            return false;
-        return true;
-    }, "JWT key must be at least 32 characters and expiration must be positive")
-    .ValidateOnStart();
-```
-
-### Azure Key Vault (Production)
-
-```csharp
-// Program.cs — add Key Vault as a configuration source
-if (builder.Environment.IsProduction())
-{
-    var keyVaultUri = new Uri(builder.Configuration["KeyVault:Uri"]!);
-    builder.Configuration.AddAzureKeyVault(keyVaultUri, new DefaultAzureCredential());
-}
-```
-
-### Configuration for Multiple Environments
-
-```csharp
-// Named options — different config per named instance
-builder.Services.AddOptions<SmtpOptions>("internal")
-    .BindConfiguration("Smtp:Internal");
-builder.Services.AddOptions<SmtpOptions>("customer")
-    .BindConfiguration("Smtp:Customer");
-
-// Usage
-public class EmailService(IOptionsSnapshot<SmtpOptions> options)
-{
-    public async Task SendInternalEmail(string to, string body)
-    {
-        var smtp = options.Get("internal");
-        // ...
-    }
-}
+```bash
+NODE_ENV=development
+PORT=3000
+APP_NAME=my-nestjs-api
+DATABASE_URL=postgres://user:password@localhost:5432/mydb
+DB_POOL_SIZE=10
+JWT_SECRET=replace-with-min-32-character-random-string
+JWT_EXPIRES_IN=1h
+REDIS_HOST=localhost
+REDIS_PORT=6379
+ALLOWED_ORIGINS=http://localhost:4200
 ```
 
 ## Anti-patterns
 
-### Don't Read IConfiguration Directly
+### process.env in Services
 
-```csharp
-// BAD — stringly-typed, no validation, hard to test
-public class OrderService(IConfiguration config)
-{
-    public void Process()
-    {
-        var timeout = int.Parse(config["Database:CommandTimeout"]!);
-    }
+```typescript
+// BAD — bypasses validation, untestable, no type safety
+@Injectable()
+export class MailService {
+  private readonly apiKey = process.env.MAIL_API_KEY;
 }
 
-// GOOD — strongly-typed options
-public class OrderService(IOptions<DatabaseOptions> options)
-{
-    public void Process()
-    {
-        var timeout = options.Value.CommandTimeoutSeconds;
-    }
+// GOOD — injected, validated at startup
+@Injectable()
+export class MailService {
+  constructor(private readonly config: ConfigService) {}
+  private get apiKey(): string {
+    return this.config.getOrThrow<string>('MAIL_API_KEY');
+  }
 }
 ```
 
-### Don't Put Secrets in appsettings.json
+### config.get() Without Fallback on Required Values
 
-```json
-// BAD — committed to source control
-{
-  "Jwt": { "Key": "super-secret-key" },
-  "Database": { "ConnectionString": "Server=prod;Password=secret" }
-}
+```typescript
+// BAD — returns undefined if key missing; error surfaces much later
+const secret = this.config.get('JWT_SECRET');
+const token = jwt.sign(payload, secret); // TypeError: secret is undefined
 
-// GOOD — appsettings.json has defaults/structure only
-{
-  "Jwt": { "Key": "", "Issuer": "myapp", "Audience": "myapp" },
-  "Database": { "ConnectionString": "" }
-}
-// Secrets provided via user-secrets (dev) or env vars / Key Vault (prod)
+// GOOD — throws immediately with clear message
+const secret = this.config.getOrThrow<string>('JWT_SECRET');
 ```
 
-### Don't Skip Startup Validation
+### No Startup Validation
 
-```csharp
-// BAD — misconfiguration discovered at runtime
-builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
+```typescript
+// BAD — app starts even with missing DATABASE_URL; crashes on first DB call
+ConfigModule.forRoot({ isGlobal: true })
 
-// GOOD — fail fast at startup
-builder.Services.AddOptions<JwtOptions>()
-    .BindConfiguration("Jwt")
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
+// GOOD — Joi schema rejects startup if required vars are missing
+ConfigModule.forRoot({
+  isGlobal: true,
+  validationSchema: Joi.object({ DATABASE_URL: Joi.string().required() }),
+})
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Binding config to class | Options pattern with `BindConfiguration` |
-| Simple, immutable config | `IOptions<T>` |
-| Config that changes per request | `IOptionsSnapshot<T>` |
-| Background service watching config | `IOptionsMonitor<T>` |
-| Development secrets | `dotnet user-secrets` |
-| Production secrets | Azure Key Vault or environment variables |
-| Validating config | `ValidateDataAnnotations()` + `ValidateOnStart()` |
-| Multiple configs of same type | Named options with `IOptionsSnapshot<T>.Get(name)` |
+|---|---|
+| Required string variable | `Joi.string().required()` + `config.getOrThrow()` |
+| Optional with default | `Joi.number().default(3000)` + `config.get('PORT', 3000)` |
+| Grouping related vars (DB, JWT) | `registerAs('namespace', factory)` |
+| Feature flag | `Joi.boolean().default(false)` |
+| Env-specific .env files | `envFilePath: ['.env.${NODE_ENV}', '.env']` |
+| Testing with different config | Provide mock `ConfigService` in `createTestingModule` |

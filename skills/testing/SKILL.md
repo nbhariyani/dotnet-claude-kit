@@ -1,334 +1,247 @@
 ---
 name: testing
 description: >
-  Testing strategy for .NET 10 applications. Covers xUnit v3, WebApplicationFactory
-  for integration tests, Testcontainers for real database testing, Verify for
-  snapshot testing, and the AAA pattern.
+  NestJS testing strategy using Jest, SuperTest, and Testcontainers.
+  Covers Test.createTestingModule() for unit tests, SuperTest E2E tests against
+  a real NestJS application, Testcontainers for real database testing, and the
+  AAA pattern with clear naming conventions.
   Load this skill when writing tests, setting up test infrastructure, reviewing
-  test coverage, or when the user mentions "test", "xUnit", "WebApplicationFactory",
-  "Testcontainers", "integration test", "unit test", "bUnit", "snapshot test",
-  "Verify", "test coverage", "AAA pattern", "WireMock", or "FakeTimeProvider".
+  test coverage, or when the user mentions "test", "Jest", "SuperTest",
+  "Testcontainers", "integration test", "unit test", "e2e test",
+  "createTestingModule", "spec", "mock provider", or "test coverage".
 ---
 
-# Testing (.NET 10)
+# Testing (NestJS)
 
 ## Core Principles
 
-1. **Integration tests are the highest-value tests** — A single `WebApplicationFactory` test covers routing, binding, validation, business logic, and persistence in one shot. Start here before writing unit tests.
-2. **Real databases in tests** — Use Testcontainers to spin up real PostgreSQL/SQL Server instances. In-memory providers hide real bugs (transactions, constraints, SQL generation).
-3. **AAA pattern is mandatory** — Every test has three clearly separated sections: Arrange, Act, Assert. No mixing.
-4. **Test behavior, not implementation** — Tests should survive refactoring. Test what the system does, not how it does it.
+1. **E2E tests are the highest-value tests** — A single SuperTest E2E test covers
+   routing, guards, interceptors, pipes, business logic, and persistence in one shot.
+   Start here before unit tests for HTTP-driven features.
+2. **Real databases in E2E tests** — Use `@testcontainers/postgresql` for real
+   PostgreSQL. SQLite in-memory hides real bugs (transactions, constraints, query plans).
+3. **AAA pattern is mandatory** — Every test has three clearly separated sections:
+   Arrange / Act / Assert, separated by blank lines.
+4. **Test behavior, not implementation** — Assert on HTTP responses and database state,
+   not on which internal methods were called.
+5. **Share expensive fixtures** — Start database containers in `beforeAll`, not
+   `beforeEach`. One container per test suite, not per test.
 
 ## Patterns
 
-### xUnit v3 Basics
+### E2E Test with SuperTest + Testcontainers
 
-```csharp
-public class OrderServiceTests
-{
-    [Fact]
-    public async Task CreateOrder_WithValidItems_ReturnsSuccessResult()
-    {
-        // Arrange
-        var db = CreateInMemoryDb();
-        var clock = new FakeTimeProvider(new DateTimeOffset(2025, 1, 15, 0, 0, 0, TimeSpan.Zero));
-        var service = new OrderService(db, clock);
-        var request = new CreateOrderRequest("customer-1", [new("product-1", 2)]);
+```typescript
+// test/orders.e2e-spec.ts
+import { Test, TestingModule } from '@nestjs/testing';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import * as request from 'supertest';
+import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { DataSource } from 'typeorm';
+import { AppModule } from '../src/app.module';
 
-        // Act
-        var result = await service.CreateAsync(request);
+describe('Orders (e2e)', () => {
+  let app: INestApplication;
+  let container: StartedPostgreSqlContainer;
+  let dataSource: DataSource;
 
-        // Assert
-        Assert.True(result.IsSuccess);
-        Assert.NotEqual(Guid.Empty, result.Value.Id);
-        Assert.Equal(clock.GetUtcNow(), result.Value.CreatedAt);
-    }
+  beforeAll(async () => {
+    container = await new PostgreSqlContainer().start();
 
-    [Theory]
-    [InlineData("")]
-    [InlineData(null)]
-    public async Task CreateOrder_WithInvalidCustomerId_ReturnsFailure(string? customerId)
-    {
-        // Arrange
-        var service = CreateService();
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    })
+      .overrideProvider('DATABASE_URL')
+      .useValue(container.getConnectionUri())
+      .compile();
 
-        // Act
-        var result = await service.CreateAsync(new CreateOrderRequest(customerId!, []));
+    app = module.createNestApplication();
+    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
+    await app.init();
 
-        // Assert
-        Assert.False(result.IsSuccess);
-    }
-}
-```
+    dataSource = module.get(DataSource);
+    await dataSource.runMigrations();
+  });
 
-### Integration Tests with WebApplicationFactory
+  afterAll(async () => {
+    await app.close();
+    await container.stop();
+  });
 
-The highest-value test pattern. Tests the full HTTP pipeline.
+  afterEach(async () => {
+    await dataSource.query('TRUNCATE TABLE orders CASCADE');
+  });
 
-```csharp
-// Fixtures/ApiFixture.cs
-public class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
-{
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder()
-        .WithImage("postgres:17")
-        .Build();
-
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
-    {
-        builder.ConfigureServices(services =>
-        {
-            // Replace the real DB with Testcontainers
-            services.RemoveAll<DbContextOptions<AppDbContext>>();
-            services.AddDbContext<AppDbContext>(options =>
-                options.UseNpgsql(_postgres.GetConnectionString()));
-        });
-    }
-
-    public async Task InitializeAsync()
-    {
-        await _postgres.StartAsync();
-
-        // Apply migrations
-        using var scope = Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.Database.MigrateAsync();
-    }
-
-    public new async Task DisposeAsync()
-    {
-        await _postgres.DisposeAsync();
-        await base.DisposeAsync();
-    }
-}
-```
-
-```csharp
-// Tests/Orders/CreateOrderTests.cs
-public class CreateOrderTests(ApiFixture fixture) : IClassFixture<ApiFixture>
-{
-    private readonly HttpClient _client = fixture.CreateClient();
-
-    [Fact]
-    public async Task CreateOrder_ReturnsCreated_WithValidRequest()
-    {
-        // Arrange
-        var request = new CreateOrderRequest("customer-1", [new("product-1", 2)]);
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/orders", request);
-
-        // Assert
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-
-        var order = await response.Content.ReadFromJsonAsync<OrderResponse>();
-        Assert.NotNull(order);
-        Assert.NotEqual(Guid.Empty, order.Id);
-        Assert.Contains("/api/orders/", response.Headers.Location?.ToString());
-    }
-
-    [Fact]
-    public async Task CreateOrder_ReturnsValidationProblem_WithEmptyItems()
-    {
-        // Arrange
-        var request = new CreateOrderRequest("customer-1", []);
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/orders", request);
-
-        // Assert
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-}
-```
-
-### Testcontainers for Real Database Testing
-
-```csharp
-// For SQL Server
-private readonly MsSqlContainer _mssql = new MsSqlBuilder()
-    .WithImage("mcr.microsoft.com/mssql/server:2022-latest")
-    .Build();
-
-// For PostgreSQL
-private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder()
-    .WithImage("postgres:17")
-    .Build();
-
-// For Redis
-private readonly RedisContainer _redis = new RedisBuilder()
-    .WithImage("redis:7")
-    .Build();
-```
-
-### Verify Snapshot Testing
-
-Use Verify for complex response objects where manual assertions would be fragile.
-
-```csharp
-[Fact]
-public async Task GetOrder_MatchesSnapshot()
-{
+  it('POST /orders_validRequest_returns201', async () => {
     // Arrange
-    await SeedOrder(fixture);
+    const dto = { customerId: 'cust-1', items: [{ productId: 'p-1', qty: 2 }] };
 
     // Act
-    var response = await _client.GetAsync("/api/orders/known-id");
-    var content = await response.Content.ReadAsStringAsync();
-
-    // Assert — compares against a stored .verified.txt file
-    await Verify(content);
-}
-```
-
-On first run, Verify creates a `.verified.txt` file. On subsequent runs, it compares output. If the output changes, the test fails and shows a diff.
-
-### Test Data Builders
-
-```csharp
-public class OrderBuilder
-{
-    private string _customerId = "default-customer";
-    private List<OrderItem> _items = [new("product-1", 1, 9.99m)];
-    private OrderStatus _status = OrderStatus.Pending;
-
-    public OrderBuilder WithCustomer(string customerId)
-    {
-        _customerId = customerId;
-        return this;
-    }
-
-    public OrderBuilder WithItems(params OrderItem[] items)
-    {
-        _items = [..items];
-        return this;
-    }
-
-    public OrderBuilder WithStatus(OrderStatus status)
-    {
-        _status = status;
-        return this;
-    }
-
-    public Order Build() => Order.Create(_customerId, _items, _status);
-}
-
-// Usage in tests
-var order = new OrderBuilder()
-    .WithCustomer("vip-customer")
-    .WithStatus(OrderStatus.Confirmed)
-    .Build();
-```
-
-### Testing Time-Dependent Code
-
-Use `TimeProvider` (built into .NET 8+) and `FakeTimeProvider` from `Microsoft.Extensions.TimeProvider.Testing`.
-
-```csharp
-[Fact]
-public async Task ExpireOrders_MarksOldPendingOrdersAsExpired()
-{
-    // Arrange
-    var clock = new FakeTimeProvider(new DateTimeOffset(2025, 6, 1, 0, 0, 0, TimeSpan.Zero));
-    var db = CreateDb();
-    var order = Order.Create("customer-1", items, clock.GetUtcNow());
-    db.Orders.Add(order);
-    await db.SaveChangesAsync();
-
-    // Advance time past expiry threshold
-    clock.Advance(TimeSpan.FromDays(31));
-
-    var handler = new ExpireOrders.Handler(db, clock);
-
-    // Act
-    await handler.Handle(new ExpireOrders.Command(), CancellationToken.None);
+    const response = await request(app.getHttpServer())
+      .post('/orders')
+      .send(dto)
+      .expect(201);
 
     // Assert
-    var updated = await db.Orders.FindAsync(order.Id);
-    Assert.Equal(OrderStatus.Expired, updated!.Status);
-}
+    expect(response.body.id).toBeDefined();
+    expect(response.body.customerId).toBe('cust-1');
+  });
+
+  it('POST /orders_emptyItems_returns400', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/orders')
+      .send({ customerId: 'cust-1', items: [] })
+      .expect(400);
+
+    expect(response.body.message).toBeDefined();
+  });
+});
+```
+
+### Unit Test with createTestingModule
+
+Use for service logic that does not require a real database.
+
+```typescript
+// orders/orders.service.spec.ts
+import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { OrdersService } from './orders.service';
+import { Order } from './entities/order.entity';
+
+describe('OrdersService', () => {
+  let service: OrdersService;
+  const mockRepo = {
+    save: jest.fn(),
+    findOne: jest.fn(),
+    findAndCount: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        OrdersService,
+        { provide: getRepositoryToken(Order), useValue: mockRepo },
+      ],
+    }).compile();
+
+    service = module.get<OrdersService>(OrdersService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('create_validDto_savesAndReturns', async () => {
+    // Arrange
+    const dto = { customerId: 'cust-1', items: [{ productId: 'p-1', qty: 2 }] };
+    mockRepo.save.mockResolvedValue({ id: 'order-1', ...dto });
+
+    // Act
+    const result = await service.create(dto);
+
+    // Assert
+    expect(result.id).toBe('order-1');
+    expect(mockRepo.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('findById_nonExistentId_returnsNull', async () => {
+    mockRepo.findOne.mockResolvedValue(null);
+    const result = await service.findById('missing-id');
+    expect(result).toBeNull();
+  });
+});
+```
+
+### Testing Guards
+
+```typescript
+// common/guards/jwt-auth.guard.spec.ts
+import { ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { JwtAuthGuard } from './jwt-auth.guard';
+
+describe('JwtAuthGuard', () => {
+  let guard: JwtAuthGuard;
+
+  beforeEach(() => {
+    const reflector = new Reflector();
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(true);
+    guard = new JwtAuthGuard(reflector);
+  });
+
+  it('canActivate_publicRoute_returnsTrue', () => {
+    const ctx = {
+      getHandler: jest.fn(),
+      getClass: jest.fn(),
+    } as unknown as ExecutionContext;
+
+    expect(guard.canActivate(ctx)).toBe(true);
+  });
+});
 ```
 
 ### Test Naming Convention
 
-Use the pattern: `MethodName_StateUnderTest_ExpectedBehavior`
+`unitOfWork_stateOrInput_expectedBehavior`:
 
-```csharp
-[Fact] public async Task CreateOrder_WithValidItems_ReturnsSuccessResult() { }
-[Fact] public async Task CreateOrder_WithEmptyItems_ReturnsValidationError() { }
-[Fact] public async Task GetOrder_WithNonExistentId_ReturnsNotFound() { }
-[Fact] public async Task CancelOrder_WhenAlreadyShipped_ReturnsConflict() { }
+```
+create_validDto_returns201
+create_missingField_returns400
+findById_nonExistentId_returnsNull
+cancel_alreadyShipped_throwsConflict
 ```
 
 ## Anti-patterns
 
-### Don't Use In-Memory Database for Integration Tests
+### Don't Use SQLite In-Memory for E2E Tests
 
-```csharp
-// BAD — hides real SQL behavior, transactions, constraints
-services.AddDbContext<AppDbContext>(options =>
-    options.UseInMemoryDatabase("TestDb"));
+```typescript
+// BAD — hides PostgreSQL behavior: constraints, transactions, JSON types
+TypeOrmModule.forRoot({ type: 'sqlite', database: ':memory:' })
 
-// GOOD — Testcontainers with real database
-services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(testContainer.GetConnectionString()));
+// GOOD
+const container = await new PostgreSqlContainer().start();
 ```
 
-### Don't Test Implementation Details
+### Don't Test Internal Implementation
 
-```csharp
-// BAD — testing that a specific repository method was called
-mock.Verify(x => x.AddAsync(It.IsAny<Order>()), Times.Once);
-mock.Verify(x => x.SaveChangesAsync(), Times.Once);
+```typescript
+// BAD — breaks on any refactor even if behavior is unchanged
+expect(mockRepo.save).toHaveBeenCalledWith(expect.objectContaining({ status: 'pending' }));
 
-// GOOD — test the observable outcome
-var order = await db.Orders.FindAsync(orderId);
-Assert.NotNull(order);
-Assert.Equal(OrderStatus.Created, order.Status);
+// GOOD — assert observable outcome
+const order = await dataSource.getRepository(Order).findOne({ where: { id } });
+expect(order.status).toBe('pending');
 ```
 
-### Don't Share Mutable State Between Tests
+### Don't Start Containers per Test
 
-```csharp
-// BAD — static shared state
-private static readonly AppDbContext SharedDb = CreateDb();
+```typescript
+// BAD — one container per test = minutes of overhead
+beforeEach(async () => { container = await new PostgreSqlContainer().start(); });
 
-// GOOD — fresh state per test (or use IAsyncLifetime for shared fixtures)
-private AppDbContext CreateDb() => new(new DbContextOptionsBuilder<AppDbContext>()...);
+// GOOD — share one container across the suite
+beforeAll(async () => { container = await new PostgreSqlContainer().start(); });
 ```
 
-### Don't Write Assertion-Free Tests
+### Don't Skip Global Pipes in E2E Setup
 
-```csharp
-// BAD — no assertion, only checks it doesn't throw
-[Fact]
-public async Task CreateOrder_Works()
-{
-    await service.CreateAsync(request);
-    // "it didn't throw, so it works!" — NO
-}
+```typescript
+// BAD — ValidationPipe missing; test passes, prod rejects the same request
+app = module.createNestApplication();
+await app.init();
 
-// GOOD — assert the expected outcome
-[Fact]
-public async Task CreateOrder_PersistsOrderToDatabase()
-{
-    var result = await service.CreateAsync(request);
-
-    var persisted = await db.Orders.FindAsync(result.Value.Id);
-    Assert.NotNull(persisted);
-    Assert.Equal(request.CustomerId, persisted.CustomerId);
-}
+// GOOD — mirror production setup exactly
+app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| Testing an API endpoint | `WebApplicationFactory` integration test |
-| Testing business logic in isolation | Unit test with fakes/stubs |
-| Database-dependent tests | Testcontainers (real DB) |
-| Complex response validation | Verify snapshot testing |
-| Time-dependent logic | `FakeTimeProvider` |
-| External API dependency | `WireMock.Net` or `HttpMessageHandler` stub |
-| Parameterized test cases | `[Theory]` with `[InlineData]` or `[MemberData]` |
-| Test data setup | Builder pattern |
-| Shared expensive fixture | `IClassFixture<T>` with `IAsyncLifetime` |
+|---|---|
+| HTTP endpoint (routing + guards + validation + DB) | SuperTest E2E + Testcontainers |
+| Service business logic (no DB needed) | Unit test with `createTestingModule` + mock repo |
+| Guard / interceptor behavior | Unit test with mock `ExecutionContext` |
+| Time-dependent logic | `jest.useFakeTimers()` |
+| External HTTP calls | `nock` or Mock Service Worker (`msw`) |
+| Shared expensive setup (DB container) | `beforeAll` + `afterAll` |
+| Parameterized test cases | `test.each` / `it.each` |

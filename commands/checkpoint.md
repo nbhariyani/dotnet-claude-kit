@@ -66,24 +66,24 @@ User: /checkpoint
 Claude: Assessing current state...
   3 files modified, 1 new file.
 
-  Committing: "Add CreateOrder validation with FluentValidation"
-  - src/Orders/Features/CreateOrder.cs
-  - src/Orders/Features/CreateOrderValidator.cs (new)
-  - tests/Orders.Tests/Features/CreateOrderTests.cs
+  Committing: "feat: add CreateOrder validation with class-validator"
+  - src/orders/dto/create-order.dto.ts
+  - src/orders/orders.service.ts
+  - src/orders/orders.service.spec.ts (new)
 
   Commit: a1b2c3d
 
   Writing handoff to .claude/handoff.md:
   ## Completed
-  - [x] Added FluentValidation to CreateOrder (src/Orders/Features/CreateOrder.cs)
-  - [x] Integration test covering 3 validation scenarios
+  - [x] Added class-validator decorators to CreateOrderDto
+  - [x] Unit test covering 3 validation scenarios
 
   ## Pending
-  - [ ] Add same validation pattern to UpdateOrder
-  - [ ] Add validation to DeleteOrder (check authorization first)
+  - [ ] Add same validation pattern to UpdateOrderDto
+  - [ ] Wire up @nestjs/terminus health endpoint
 
   ## Learned
-  - FluentValidation validators must be registered in module DI setup
+  - ValidationPipe must be registered globally in main.ts, not per-controller
 
   Checkpoint saved. Safe to switch tasks or end session.
 ```

@@ -1,251 +1,193 @@
 ---
 name: scalar
 description: >
-  Scalar API documentation UI for .NET 10 applications. Covers setup, themes,
-  authentication prefill, multiple documents, layout options, and security.
-  A modern replacement for Swagger UI.
-  Load this skill when setting up API documentation UI, or when the user mentions
-  "Scalar", "MapScalarApiReference", "API reference", "Swagger UI replacement",
-  "API documentation UI", "Scalar theme", "interactive API docs", or "Try It".
+  Scalar API reference UI for NestJS as a modern alternative to Swagger UI.
+  Load this skill when setting up @scalar/nestjs-api-reference, replacing or
+  augmenting Swagger UI, configuring a better API explorer, or exposing the
+  OpenAPI spec for Scalar.
 ---
-
-# Scalar
 
 ## Core Principles
 
-1. **Scalar replaces Swagger UI** — Scalar is the recommended API documentation UI for .NET 10. Faster rendering, built-in dark mode, code generation for dozens of languages, and full OpenAPI 3.1 support.
-2. **Development only by default** — Wrap `MapScalarApiReference()` in an `IsDevelopment()` check. API documentation exposes internal structure. If needed in production, add authorization.
-3. **Disable the proxy for sensitive APIs** — Scalar's "Try It" feature routes through `proxy.scalar.com` by default. Disable it with `.WithProxy(null)` to keep auth headers local.
-4. **Security schemes come from OpenAPI** — Scalar reads security schemes from the OpenAPI document. Configure them via document transformers, not in Scalar directly.
+1. **Keep `@nestjs/swagger` for spec generation; use Scalar only for the UI.**
+   `@nestjs/swagger` generates the OpenAPI document (via `SwaggerModule.createDocument`).
+   Scalar renders that document in a better UI. The two are complementary, not mutually
+   exclusive.
+
+2. **Expose the spec at `/api-json` so Scalar can reference it.** Scalar needs a URL
+   to fetch the OpenAPI JSON. Use `SwaggerModule.setup` with a custom path just for
+   the JSON endpoint, or write the spec as a static response.
+
+3. **Never run both Swagger UI and Scalar on the same path.** They will conflict.
+   Use different paths: `/docs` for Scalar, `/docs-swagger` for Swagger UI if you
+   need both during migration.
+
+4. **Gate the UI on non-production environments.** API explorers expose your full
+   API surface to anyone who can reach the server. Never enable Scalar in production
+   unless the endpoint is behind auth or an internal network.
+
+5. **Scalar uses the same `@ApiProperty` annotations as Swagger UI.** No additional
+   annotations are needed. All existing DTO documentation and `DocumentBuilder` config
+   carries over.
 
 ## Patterns
 
-### Basic Setup
+### Install Dependencies
 
-```csharp
-using Scalar.AspNetCore;
-
-var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddOpenApi();
-
-var app = builder.Build();
-
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-    app.MapScalarApiReference();  // UI at /scalar/v1
-}
-
-app.Run();
+```bash
+pnpm add @scalar/nestjs-api-reference
+# @nestjs/swagger is still required for spec generation
+pnpm add @nestjs/swagger swagger-ui-express
 ```
 
-### Customized Configuration
+### main.ts: Expose Spec at /api-json and Scalar at /docs
 
-```csharp
-app.MapScalarApiReference(options =>
-{
-    options
-        .WithTitle("Checkout API")
-        .WithTheme(ScalarTheme.Mars)
-        .WithDefaultHttpClient(ScalarTarget.CSharp, ScalarClient.HttpClient)
-        .WithPreferredScheme("Bearer")
-        .WithProxy(null)  // Disable external proxy
-        .WithSidebar(true);
-});
-```
+```typescript
+// src/main.ts
+import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { apiReference } from '@scalar/nestjs-api-reference';
+import { ConfigService } from '@nestjs/config';
+import { AppModule } from './app.module';
 
-### Authentication Prefill (Development Only)
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create(AppModule);
+  const config = app.get(ConfigService);
 
-Pre-fill credentials so developers don't have to paste tokens manually. The OpenAPI document must already include the security scheme via a document transformer.
+  app.setGlobalPrefix('api');
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
-```csharp
-if (app.Environment.IsDevelopment())
-{
-    app.MapScalarApiReference(options =>
-    {
-        options
-            .WithPreferredScheme("Bearer")
-            .AddHttpAuthentication("Bearer", auth =>
-            {
-                auth.Token = "dev-only-test-token";
-            });
+  if (config.get('NODE_ENV') !== 'production') {
+    const specBuilder = new DocumentBuilder()
+      .setTitle(config.getOrThrow<string>('APP_NAME'))
+      .setDescription('REST API')
+      .setVersion('1.0')
+      .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'access-token')
+      .build();
+
+    const document = SwaggerModule.createDocument(app, specBuilder);
+
+    // Expose raw JSON spec (Scalar reads from this URL)
+    app.use('/api-json', (_req: unknown, res: { json: (d: unknown) => void }) => {
+      res.json(document);
     });
+
+    // Scalar API reference UI
+    app.use(
+      '/docs',
+      apiReference({
+        spec: { url: '/api-json' },
+        theme: 'default',
+        layout: 'modern',
+        defaultHttpClient: {
+          targetKey: 'javascript',
+          clientKey: 'fetch',
+        },
+      }),
+    );
+  }
+
+  await app.listen(config.getOrThrow<number>('PORT'));
 }
+
+bootstrap();
 ```
 
-Other auth types:
+### Scalar with Authentication Pre-configured
 
-```csharp
-// API Key
-options.WithApiKeyAuthentication(apiKey =>
-{
-    apiKey.Token = "dev-api-key";
-});
-
-// OAuth2
-options.WithOAuth2Authentication(oauth =>
-{
-    oauth.ClientId = "your-client-id";
-    oauth.Scopes = ["openid", "profile"];
-});
+```typescript
+app.use(
+  '/docs',
+  apiReference({
+    spec: { url: '/api-json' },
+    authentication: {
+      preferredSecurityScheme: 'access-token',
+      http: {
+        bearer: {
+          token: '',  // user fills this in the UI
+        },
+      },
+    },
+  }),
+);
 ```
 
-### Available Themes
+### Running Both Scalar and Swagger UI (Migration Period)
 
-```csharp
-// ScalarTheme options: Default, Moon, Purple, BluePlanet, Saturn, Mars, DeepSpace, Kepler, Solarized, Laserwave
-options.WithTheme(ScalarTheme.Mars);
+```typescript
+// Scalar at /docs (primary)
+app.use('/docs', apiReference({ spec: { url: '/api-json' } }));
+
+// Swagger UI at /docs-swagger (legacy; remove after migration)
+SwaggerModule.setup('docs-swagger', app, document);
 ```
 
-### Multiple API Documents
+### Custom Scalar Theme and Branding
 
-```csharp
-// Register multiple OpenAPI documents
-builder.Services.AddOpenApi("v1");
-builder.Services.AddOpenApi("v2-beta");
-
-// Scalar picks them up automatically
-app.MapOpenApi();
-app.MapScalarApiReference();
-// Available at /scalar/v1 and /scalar/v2-beta
-```
-
-Or configure documents explicitly:
-
-```csharp
-app.MapScalarApiReference(options =>
-{
-    options
-        .AddDocument("v1", "Production API")
-        .AddDocument("v2-beta", "Beta API", isDefault: true);
-});
-```
-
-### Custom Route Prefix
-
-```csharp
-// Default is /scalar/{documentName}
-app.MapScalarApiReference("/api-docs");
-// Now at /api-docs/v1
-```
-
-### Production with Authorization
-
-```csharp
-// When partners need access to docs in production
-app.MapOpenApi().RequireAuthorization("ApiDocs");
-app.MapScalarApiReference().RequireAuthorization("ApiDocs");
-```
-
-### Force Dark Mode
-
-```csharp
-options.ForceDarkMode();
-```
-
-### Classic Layout (Swagger-like)
-
-```csharp
-options.WithClassicLayout();
+```typescript
+app.use(
+  '/docs',
+  apiReference({
+    spec: { url: '/api-json' },
+    theme: 'purple',           // options: default, alternate, moon, purple, solarized
+    metaData: {
+      title: 'My API Reference',
+      description: 'Internal API documentation',
+      ogTitle: 'My API',
+    },
+    hideDownloadButton: false,
+    hideTestRequestButton: false,
+  }),
+);
 ```
 
 ## Anti-patterns
 
-### Don't Expose Scalar in Production Without Auth
+### Same Path for Scalar and Swagger UI
 
-```csharp
-// BAD — anyone can see your API structure
-app.MapOpenApi();
-app.MapScalarApiReference();
+```typescript
+// BAD — both try to serve on /docs; last one registered wins; the other breaks
+SwaggerModule.setup('docs', app, document);
+app.use('/docs', apiReference({ spec: { url: '/api-json' } }));
 
-// GOOD — development only
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-    app.MapScalarApiReference();
+// GOOD — different paths
+app.use('/docs', apiReference({ spec: { url: '/api-json' } }));
+SwaggerModule.setup('docs-swagger', app, document);
+```
+
+### Scalar Without @nestjs/swagger (No Spec)
+
+```typescript
+// BAD — Scalar has no spec to render; page shows empty or errors
+app.use('/docs', apiReference({ spec: { url: '/api-json' } }));
+// but /api-json endpoint is never set up
+
+// GOOD — generate the document with @nestjs/swagger and expose it at /api-json
+const document = SwaggerModule.createDocument(app, specBuilder);
+app.use('/api-json', (_req, res) => res.json(document));
+app.use('/docs', apiReference({ spec: { url: '/api-json' } }));
+```
+
+### Enabling Scalar in Production
+
+```typescript
+// BAD — exposes full API surface publicly
+app.use('/docs', apiReference({ spec: { url: '/api-json' } }));
+// no environment guard
+
+// GOOD — gate on non-production
+if (config.get('NODE_ENV') !== 'production') {
+  app.use('/docs', apiReference({ spec: { url: '/api-json' } }));
 }
-
-// GOOD — production with auth
-app.MapOpenApi().RequireAuthorization("ApiDocs");
-app.MapScalarApiReference().RequireAuthorization("ApiDocs");
-```
-
-### Don't Pre-fill Real Credentials
-
-```csharp
-// BAD — real tokens visible in browser
-options.AddHttpAuthentication("Bearer", auth =>
-{
-    auth.Token = "eyJhbG...real-production-token";
-});
-
-// GOOD — dev-only test tokens
-if (app.Environment.IsDevelopment())
-{
-    options.AddHttpAuthentication("Bearer", auth =>
-    {
-        auth.Token = "dev-only-test-token";
-    });
-}
-```
-
-### Don't Forget the Security Scheme Transformer
-
-```csharp
-// BAD — no auth UI in Scalar because OpenAPI doc has no security schemes
-builder.Services.AddOpenApi();
-app.MapScalarApiReference(options =>
-{
-    options.WithPreferredScheme("Bearer"); // Does nothing!
-});
-
-// GOOD — register the document transformer first
-builder.Services.AddOpenApi(options =>
-{
-    options.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
-});
-app.MapScalarApiReference(options =>
-{
-    options.WithPreferredScheme("Bearer");
-});
-```
-
-### Don't Leave the Proxy Enabled for Sensitive APIs
-
-```csharp
-// BAD — auth headers flow through proxy.scalar.com
-app.MapScalarApiReference();
-
-// GOOD — disable proxy for APIs with sensitive data
-app.MapScalarApiReference(options =>
-{
-    options.WithProxy(null);
-});
-```
-
-### Don't Use Swagger UI for New .NET 10 Projects
-
-```csharp
-// BAD — Swashbuckle removed from templates, maintenance concerns
-builder.Services.AddSwaggerGen();
-app.UseSwaggerUI();
-
-// GOOD — built-in OpenAPI + Scalar
-builder.Services.AddOpenApi();
-app.MapOpenApi();
-app.MapScalarApiReference();
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| API documentation UI | `MapScalarApiReference()` with `MapOpenApi()` |
-| Development environment | Default setup with `IsDevelopment()` guard |
-| Production API docs | Add `.RequireAuthorization()` to both endpoints |
-| Auth testing in dev | `AddHttpAuthentication()` with test tokens |
-| Dark theme preference | `.ForceDarkMode()` or `.WithTheme(ScalarTheme.Moon)` |
-| Multiple API versions | Multiple `AddOpenApi()` calls — Scalar detects automatically |
-| Sensitive APIs | `.WithProxy(null)` to disable external proxy |
-| Swagger-like layout | `.WithClassicLayout()` |
-| Custom route | `app.MapScalarApiReference("/api-docs")` |
+|---|---|
+| Replacing Swagger UI | Install `@scalar/nestjs-api-reference`, move to `/docs` |
+| Keeping both during migration | Scalar at `/docs`, Swagger UI at `/docs-swagger` |
+| Spec generation | Always use `@nestjs/swagger` + `DocumentBuilder` |
+| Pre-configuring auth in UI | Use `authentication.http.bearer` option |
+| Production API explorer | Gate behind auth proxy or internal network only |
+| Client SDK generation | Read from `/api-json` in CI pipeline |

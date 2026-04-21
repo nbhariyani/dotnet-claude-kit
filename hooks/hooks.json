@@ -9,6 +9,18 @@
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "matcherArgs": {
+          "command_contains": "npm run build"
+        },
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pre-build-validate.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -17,11 +29,37 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/post-edit-format.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/post-edit-format.sh \"${CLAUDE_FILE_PATH}\""
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/post-scaffold-restore.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/post-scaffold-restore.sh \"${CLAUDE_FILE_PATH}\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "matcherArgs": {
+          "command_contains": "npm test"
+        },
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/post-test-analyze.sh \"${CLAUDE_TOOL_OUTPUT_FILE}\""
+          }
+        ]
+      }
+    ],
+    "PreCommit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-antipattern.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pre-commit-format.sh"
           }
         ]
       }

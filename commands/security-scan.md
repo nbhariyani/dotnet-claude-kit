@@ -1,190 +1,117 @@
 ---
 description: >
-  Deep security audit covering OWASP Top 10, secrets detection, vulnerable NuGet
-  packages, authentication configuration, CORS policy, and data protection. Produces
-  a structured report with severity-ranked findings. Invoke when: "security scan",
-  "security audit", "check for vulnerabilities", before production deployment,
-  after adding auth or payment features.
+  Multi-layer NestJS security audit covering known CVEs, secrets, input validation,
+  authentication coverage, security headers, and CORS. Reports severity per finding
+  with remediation steps. Triggers on: "security scan", "security audit",
+  "check for vulnerabilities", "is this secure".
 ---
 
 # /security-scan
 
 ## What
 
-Comprehensive security audit that scans the solution across six dimensions:
-
-1. **Vulnerable dependencies** -- NuGet packages with known CVEs
-2. **Secrets detection** -- Hardcoded connection strings, API keys, tokens in source
-3. **OWASP Top 10 patterns** -- Injection, broken auth, sensitive data exposure,
-   security misconfiguration, and more
-4. **Authentication and authorization** -- Missing `[Authorize]` attributes, weak
-   JWT configuration, insecure cookie settings
-5. **CORS policy** -- Overly permissive origins, missing restrictions
-6. **Data protection** -- PII in logs, unencrypted sensitive data, missing input validation
-
-The output is a structured security report with findings ranked by severity
-(Critical, High, Medium, Low) and actionable remediation steps for each finding.
+Runs a 6-layer security audit specifically tuned for NestJS applications. Each layer
+targets a distinct attack surface. Findings are reported with severity and a specific
+remediation step — not vague recommendations.
 
 ## When
 
-- Before deploying to production or staging environments
-- During a security review or compliance audit
-- After adding authentication, authorization, or payment features
-- After adding new API endpoints that handle sensitive data
-- After updating packages (to catch newly disclosed vulnerabilities)
-- Periodically as part of project health maintenance
-- User says: "security scan", "check for vulnerabilities", "is this secure?"
+- "security scan"
+- "security audit"
+- "check for vulnerabilities"
+- "is this secure"
+- Before any production deployment
+- After adding new authentication or authorization logic
 
 ## How
 
-### Phase 1: Vulnerable Dependencies
+### Layer 1: Known CVEs
 
 ```bash
-dotnet list package --vulnerable
-dotnet list package --deprecated
+npm audit --audit-level=moderate
 ```
 
-Flag any package with a known CVE. Report severity, CVE ID, and the fixed version.
+Report all moderate, high, and critical findings. `npm audit fix` for safe upgrades.
+Flag packages requiring manual major version bumps.
 
-### Phase 2: Secrets Detection
-
-Scan source files for patterns that indicate hardcoded secrets:
-
-- Connection strings with passwords in `appsettings.json` or `.cs` files
-- API keys, tokens, or credentials in source code
-- Private keys or certificates committed to the repository
-- `.env` files or `secrets.json` tracked in git
-
-Use grep-based scanning for patterns: `password=`, `secret`, `apikey`,
-`connectionstring` with literal values (not placeholders or config references).
-
-### Phase 3: OWASP Top 10 Patterns
-
-Use MCP tools and source analysis:
+### Layer 2: Secrets and Dangerous Patterns
 
 ```
-get_diagnostics(scope: "solution") -- security analyzer warnings
-detect_antipatterns(projectFilter: each project) -- broad catch, missing cancellation token
-find_references(symbolName: "FromSqlRaw") -- potential SQL injection
-find_references(symbolName: "Html.Raw") -- potential XSS
-find_symbol(name: "Authorize") -- locate auth configuration
+detect_antipatterns
 ```
 
-Check for:
-- **A01 Broken Access Control** -- Endpoints missing `[Authorize]`, insecure direct object references
-- **A02 Cryptographic Failures** -- Weak hashing, unencrypted sensitive data at rest
-- **A03 Injection** -- Raw SQL queries, unsanitized user input in commands
-- **A04 Insecure Design** -- Missing rate limiting, no input validation
-- **A05 Security Misconfiguration** -- Debug mode in production config, default credentials
-- **A06 Vulnerable Components** -- (covered in Phase 1)
-- **A07 Auth Failures** -- Weak JWT settings, missing token validation parameters
-- **A08 Data Integrity** -- Missing anti-forgery tokens, unsigned data
-- **A09 Logging Failures** -- Missing audit logging, PII in log output
-- **A10 SSRF** -- Unvalidated URLs in outbound HTTP calls
+Flag:
+- Hardcoded strings passed to `JwtModule.register({ secret: '...' })`
+- `synchronize: true` in TypeORM config (destructive in production)
+- `process.env.X` used directly instead of `ConfigService`
+- `.env` file committed to the repository
 
-### Phase 4: Auth Configuration Review
+### Layer 3: Input Validation
 
-```
-find_symbol(name: "AddAuthentication") -- locate auth setup
-find_symbol(name: "AddAuthorization") -- locate authorization policies
-get_public_api(typeName: endpoints/controllers) -- check for [Authorize] presence
+Check `main.ts` for:
+
+```typescript
+app.useGlobalPipes(new ValidationPipe({
+  whitelist: true,          // strips unknown properties
+  forbidNonWhitelisted: true,
+  transform: true,
+}));
 ```
 
-Verify:
-- JWT `ValidateIssuer`, `ValidateAudience`, `ValidateLifetime` are all `true`
-- Token expiration is reasonable (not 24+ hours for access tokens)
-- Refresh token rotation is implemented
-- Password hashing uses a strong algorithm (Argon2, bcrypt, or ASP.NET Identity default)
+Flag missing `whitelist: true` as High — unknown properties reach services unchecked.
 
-### Phase 5: CORS Policy
+### Layer 4: Authentication Coverage
 
 ```
-find_symbol(name: "AddCors") -- locate CORS configuration
-find_references(symbolName: "WithOrigins") -- check allowed origins
-find_references(symbolName: "AllowAnyOrigin") -- flag overly permissive CORS
+find_symbol APP_GUARD
+find_symbol @Public
 ```
 
-### Phase 6: Data Protection
+Verify a global `APP_GUARD` is registered. Every route must either be covered by the
+guard or explicitly decorated `@Public()`. Undecorated endpoints are a finding.
 
-- Check for PII (email, phone, SSN) in log statements
-- Verify sensitive model properties have `[PersonalData]` or are excluded from serialization
-- Check that HTTPS is enforced (`UseHttpsRedirection`, HSTS headers)
-- Verify anti-forgery token usage in form-based endpoints
+### Layer 5: Security Headers
+
+Check `main.ts` for:
+
+```typescript
+app.use(helmet());
+```
+
+Missing helmet is a Medium finding. Document which headers it would set (CSP, HSTS,
+X-Frame-Options, X-Content-Type-Options).
+
+### Layer 6: CORS Configuration
+
+Check for `origin: '*'` or `origin: true` in any environment config. These are
+Critical in production. Expected pattern:
+
+```typescript
+app.enableCors({ origin: config.getOrThrow('ALLOWED_ORIGINS').split(',') });
+```
 
 ### Report Format
 
-```markdown
-## Security Scan Report
-
-### Summary
-[X findings: N critical, N high, N medium, N low]
-
-### Critical
-- **[CVE/Category] [Title]** -- [File:Line] [Description]. [Remediation].
-
-### High
-- ...
-
-### Medium
-- ...
-
-### Low
-- ...
-
-### Passed Checks
-- [List of security checks that passed -- confirms coverage]
-```
-
-## Invokes
-
-| Type  | Name               | Purpose                                       |
-|-------|--------------------|-----------------------------------------------|
-| Skill | `authentication`   | Auth and authorization best practices          |
-| Skill | `configuration`    | Secrets management and environment config      |
-| Agent | `security-auditor` | Deep security expertise and OWASP knowledge    |
-
-### MCP Tools Used
-
-- `get_diagnostics` -- Security analyzer warnings across the solution
-- `detect_antipatterns` -- Broad catch blocks, missing cancellation tokens
-- `find_references` -- Trace usage of security-sensitive APIs
-- `find_symbol` -- Locate auth configuration, CORS setup, crypto usage
-- `get_public_api` -- Review endpoint surfaces for missing auth attributes
+| Severity | Layer | Finding | File | Fix |
+|---|---|---|---|---|
+| Critical | Secrets | Hardcoded JWT secret | auth.module.ts:8 | Use ConfigService.getOrThrow |
+| High | Validation | whitelist:true missing | main.ts:12 | Add to ValidationPipe options |
+| Medium | Headers | helmet() not applied | main.ts | Add app.use(helmet()) |
 
 ## Example
 
 ```
-User: /security-scan
+Layer 1: CVEs        — 0 critical, 1 moderate (ws@7.x)
+Layer 2: Secrets     — CRITICAL: hardcoded secret in auth.module.ts:8
+Layer 3: Validation  — PASS
+Layer 4: Auth guard  — PASS (APP_GUARD registered, 3 @Public routes)
+Layer 5: Headers     — MEDIUM: helmet() not in main.ts
+Layer 6: CORS        — PASS (explicit origin list)
 
-Claude: Running security scan across 6 dimensions...
-
-  Phase 1: Vulnerable Dependencies
-  - CRITICAL: Newtonsoft.Json 12.0.3 has CVE-2024-XXXX (upgrade to 13.0.3+)
-
-  Phase 2: Secrets Detection
-  - HIGH: Hardcoded connection string in appsettings.Development.json:8
-    contains plaintext password. Move to user-secrets or environment variable.
-
-  Phase 3: OWASP Top 10
-  - HIGH: FromSqlRaw usage in SearchService.cs:34 with string concatenation.
-    Use FromSqlInterpolated or parameterized queries.
-  - MEDIUM: No rate limiting configured on authentication endpoints.
-
-  Phase 4: Auth Configuration
-  - MEDIUM: JWT access token lifetime is 24 hours (Program.cs:67).
-    Recommend 15-30 minutes with refresh token rotation.
-
-  Phase 5: CORS Policy
-  - Passed. Origins are explicitly listed, no AllowAnyOrigin.
-
-  Phase 6: Data Protection
-  - LOW: Email address logged at Information level in OrderService.cs:23.
-    Mask PII or use Debug level.
-
-  Summary: 5 findings (1 critical, 2 high, 1 medium, 1 low)
+2 findings require immediate action before production.
 ```
 
 ## Related
 
-- `/verify` -- General verification pass including build and test
-- `/health-check` -- Broader project health assessment (includes security dimension)
+- `/verify` -- Full build + test + lint pipeline
+- `/health-check` -- Broader project health including coverage

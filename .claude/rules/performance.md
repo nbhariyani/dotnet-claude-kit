@@ -1,75 +1,68 @@
 ---
 alwaysApply: true
 description: >
-  Enforces performance best practices for .NET applications including async
-  patterns, caching, resource management, and hot-path optimizations.
+  NestJS performance rules: no sync blocking in async contexts, CancellationToken
+  equivalent, no N+1 queries, proper caching, and event loop hygiene.
 ---
 
-# Performance Rules
+# Performance Rules (NestJS)
 
 ## Async Patterns
 
-- **Always propagate `CancellationToken` through the call chain.** Dropped tokens mean cancelled requests continue burning server resources.
+- **`async/await` everywhere — no `.then()/.catch()` chains in service code.**
+  Rationale: Mixed async styles hide errors and make code harder to reason about.
 
-```csharp
+- **Never block the event loop with synchronous I/O.**
+  Rationale: Node.js is single-threaded. `fs.readFileSync`, `execSync`, and CPU-heavy
+  loops inside request handlers freeze all concurrent requests.
+
+```typescript
 // DO
-public Task<Order?> GetOrderAsync(Guid id, CancellationToken ct) =>
-    db.Orders.FirstOrDefaultAsync(o => o.Id == id, ct);
+const content = await fs.promises.readFile(path, 'utf-8');
 
-// DON'T — token silently ignored
-public Task<Order?> GetOrderAsync(Guid id, CancellationToken ct) =>
-    db.Orders.FirstOrDefaultAsync(o => o.Id == id);
+// DON'T — blocks the event loop
+const content = fs.readFileSync(path, 'utf-8');
 ```
 
-- **Async all the way — no `.Result` or `.Wait()`.** Synchronously blocking on async code causes thread pool starvation and deadlocks. The only acceptable sync-over-async location is `Program.cs` top-level statements.
+- **Never use `.Result`, `.Wait()` equivalents — i.e. no `deasync` or synchronous
+  wrappers over Promises.**
 
-## Time and Clock
+## Database
 
-- **`TimeProvider` over `DateTime.Now` / `DateTime.UtcNow`.** `TimeProvider` is injectable and testable. `DateTime.Now` is a static dependency that makes time-sensitive logic untestable.
+- **Select only needed columns for list endpoints.**
+  Rationale: Loading full entities for list/summary views pulls unnecessary data,
+  wastes memory, and increases query time.
 
-```csharp
-// DO
-public sealed class AuditService(TimeProvider clock)
-{
-    public DateTimeOffset Now => clock.GetUtcNow();
+- **No N+1 queries.** Use `relations`, `leftJoinAndSelect`, or DataLoader.
+  Rationale: N+1 turns a 1-query endpoint into N+1 database round trips.
+
+```typescript
+// DO — one JOIN query
+const orders = await repo.find({ relations: { items: true } });
+
+// DON'T — one query per order
+for (const order of orders) {
+  order.items = await itemRepo.find({ where: { orderId: order.id } });
 }
-
-// DON'T
-var now = DateTime.UtcNow;
 ```
 
-## Resource Management
+## HTTP Client
 
-- **`IHttpClientFactory` over `new HttpClient()`.** Direct instantiation causes socket exhaustion under load. The factory manages connection pooling and DNS rotation.
-- **Use `ArrayPool<T>` / `MemoryPool<T>` for buffer-heavy operations.** Renting from a pool avoids GC pressure from frequent large allocations.
+- **Use `@nestjs/axios` (HttpModule) — never `new HttpClient()` or `new axios()`.**
+  Rationale: `HttpModule` shares Axios instances; creating instances per request
+  exhausts connections and bypasses interceptors.
 
 ## Caching
 
-- **`HybridCache` over `IMemoryCache` / `IDistributedCache`.** `HybridCache` provides stampede protection, L1+L2 caching, and tag-based invalidation out of the box.
+- **Use `@nestjs/cache-manager` with Redis for shared caches.**
+  Rationale: In-memory cache does not work in multi-instance deployments.
 
-```csharp
-// DO
-var order = await cache.GetOrCreateAsync(
-    $"order:{id}",
-    async ct => await db.Orders.FindAsync([id], ct),
-    cancellationToken: ct);
+## DO / DON'T Quick Reference
 
-// DON'T — manual cache-aside with no stampede protection
-if (!memoryCache.TryGetValue(key, out var order))
-{
-    order = await db.Orders.FindAsync(id);
-    memoryCache.Set(key, order, TimeSpan.FromMinutes(5));
-}
-```
-
-## EF Core and Hot Paths
-
-- **Use compiled queries for hot-path EF Core queries.** Compiled queries skip expression tree translation on every call.
-
-```csharp
-private static readonly Func<AppDbContext, Guid, CancellationToken, Task<Order?>> GetById =
-    EF.CompileAsyncQuery((AppDbContext db, Guid id, CancellationToken ct) =>
-        db.Orders.FirstOrDefault(o => o.Id == id));
-```
-
-- **Prefer `ValueTask<T>` over `Task<T>` for high-throughput paths that often complete synchronously.** Avoids `Task` allocation when the result is already available. Use `Task` for general-purpose code where simplicity matters more.
+| DO | DON'T |
+|---|---|
+| `await fs.promises.readFile(...)` | `fs.readFileSync(...)` in handlers |
+| `repo.find({ relations: { items: true } })` | Loop with per-item query |
+| `repo.find({ select: ['id', 'status'] })` | `repo.find()` for list endpoints |
+| `HttpModule` via `@nestjs/axios` | `new axios()` or `require('axios')` per use |
+| `@nestjs/cache-manager` + Redis | Node.js in-memory Map as cache |

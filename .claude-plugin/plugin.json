@@ -1,23 +1,24 @@
 {
-  "name": "dotnet-claude-kit",
-  "version": "0.7.0",
-  "description": "The definitive Claude Code companion for .NET developers. 47 skills, 10 agents, 16 commands, 10 rules, 5 templates, 15 MCP tools, 7 hooks for modern .NET 10 / C# 14.",
+  "name": "nestjs-claude-kit",
+  "version": "0.1.0",
+  "description": "The definitive Claude Code companion for NestJS developers. 47 skills, 10 agents, 16 commands, 10 rules, 4 templates, 13 MCP tools, 7 hooks for NestJS / TypeScript.",
   "author": {
-    "name": "Mukesh Murugan",
-    "url": "https://codewithmukesh.com"
+    "name": "Naresh Bhariyani",
+    "url": "https://github.com/NarHakobyan"
   },
-  "homepage": "https://github.com/codewithmukesh/dotnet-claude-kit",
-  "repository": "https://github.com/codewithmukesh/dotnet-claude-kit",
+  "homepage": "https://github.com/NarHakobyan/nestjs-claude-kit",
+  "repository": "https://github.com/NarHakobyan/nestjs-claude-kit",
   "license": "MIT",
   "keywords": [
-    "dotnet",
-    "csharp",
-    "aspnet",
-    "efcore",
+    "nestjs",
+    "typescript",
+    "nodejs",
+    "typeorm",
+    "prisma",
     "architecture",
     "clean-architecture",
     "ddd",
-    "vertical-slice",
+    "feature-modules",
     "scaffolding",
     "code-review"
   ]

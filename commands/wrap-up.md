@@ -52,17 +52,17 @@ User: /wrap-up
 Claude: Wrapping up session...
 
 ## Session Summary
-- Implemented OrderService with validation pipeline
-- Added integration tests for order creation endpoint
-- Fixed N+1 query in GetOrdersByCustomer
+- Implemented OrdersService with validation pipeline
+- Added E2E tests for order creation endpoint using Testcontainers
+- Fixed N+1 query in findOrdersByCustomer using TypeORM relations
 
 ## Pending
-- [ ] Add retry logic to payment gateway calls (OrderService.cs:42)
-- [ ] Wire up FluentValidation for UpdateOrderCommand
+- [ ] Add retry logic to payment gateway calls (orders.service.ts:42)
+- [ ] Add class-validator decorators to UpdateOrderDto
 
 ## Learnings Captured
-- User prefers explicit mapping over AutoMapper
-- This project uses vertical slice architecture
+- User prefers explicit mapping over class-transformer @Expose()
+- This project uses Feature Modules architecture
 
 Written to .claude/handoff.md. See you next session.
 ```

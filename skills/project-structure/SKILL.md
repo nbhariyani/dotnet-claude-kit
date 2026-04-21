@@ -1,205 +1,209 @@
 ---
 name: project-structure
 description: >
-  .NET solution and project structure conventions. Covers .slnx format,
-  Directory.Build.props, Directory.Packages.props for central package management,
-  global usings, and naming conventions.
-  Load this skill when setting up a new solution, adding projects, configuring
-  build properties, or when the user mentions "solution structure", ".slnx",
-  "Directory.Build.props", "central package management", "Directory.Packages.props",
-  "global usings", ".editorconfig", "project layout", or "naming conventions".
+  NestJS project layout and organization patterns. Load this skill when deciding
+  folder structure, organizing a monorepo, configuring nest-cli.json, setting up
+  barrel exports, or restructuring an existing project layout.
 ---
-
-# Project Structure
 
 ## Core Principles
 
-1. **Central package management** — Use `Directory.Packages.props` to manage NuGet package versions in one place. No version numbers in individual `.csproj` files.
-2. **Shared build properties** — Use `Directory.Build.props` for common settings (target framework, nullable, implicit usings). Don't repeat in every project.
-3. **.slnx for solutions** — The new XML-based solution format is cleaner and more merge-friendly than the legacy `.sln` format.
-4. **src/tests separation** — Source projects in `src/`, test projects in `tests/`. Clear boundary.
+1. **Feature-first, not layer-first.** Group by domain (`orders/`, `users/`) rather
+   than by type (`controllers/`, `services/`). All files for a feature live together,
+   making it easier to find, delete, or extract a feature.
+
+2. **One module per feature.** Each feature folder has exactly one `*.module.ts` that
+   owns its providers and explicitly declares what it exports.
+
+3. **Barrel exports per module.** A `index.ts` at the feature root re-exports the
+   public surface. Consumers import from the barrel, not from nested paths.
+
+4. **`common/` for shared infrastructure.** Guards, interceptors, pipes, and filters
+   that cross feature boundaries live in `src/common/`, not inside any feature folder.
+
+5. **Nx for multi-app or multi-lib monorepos.** For single-app projects, the standard
+   NestJS `src/` layout is sufficient. Add Nx only when you need multiple deployable
+   apps or genuinely shared libraries.
 
 ## Patterns
 
-### Solution Layout
+### Standard Single-App Structure
 
 ```
-MyApp/
-├── MyApp.slnx                       # Solution file
-├── Directory.Build.props             # Shared MSBuild properties
-├── Directory.Packages.props          # Central package management
-├── .editorconfig                     # Code style rules
-├── .gitignore
-├── global.json                       # SDK version pinning
-├── src/
-│   ├── MyApp.Api/                    # Web API (entry point)
-│   │   ├── MyApp.Api.csproj
-│   │   ├── Program.cs
-│   │   └── Features/
-│   ├── MyApp.Domain/                 # Domain entities, value objects (optional)
-│   │   └── MyApp.Domain.csproj
-│   └── MyApp.Infrastructure/         # EF Core, external services (optional)
-│       └── MyApp.Infrastructure.csproj
-└── tests/
-    └── MyApp.Api.Tests/
-        └── MyApp.Api.Tests.csproj
+src/
+  app.module.ts
+  main.ts
+  common/
+    filters/
+      all-exceptions.filter.ts
+    guards/
+      jwt-auth.guard.ts
+    interceptors/
+      logging.interceptor.ts
+    pipes/
+      parse-uuid.pipe.ts
+  config/
+    configuration.ts          # registerAs factories
+    validation.schema.ts      # Joi schema
+  orders/
+    orders.module.ts
+    orders.controller.ts
+    orders.service.ts
+    dto/
+      create-order.dto.ts
+      update-order.dto.ts
+      order-response.dto.ts
+    entities/
+      order.entity.ts
+    orders.controller.spec.ts
+    orders.service.spec.ts
+  users/
+    users.module.ts
+    users.controller.ts
+    users.service.ts
+    ...
+test/
+  orders.e2e-spec.ts
+  users.e2e-spec.ts
 ```
 
-### Directory.Build.props
+### Barrel Export per Feature
 
-```xml
-<Project>
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <LangVersion>14</LangVersion>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-  </PropertyGroup>
-</Project>
+```typescript
+// src/orders/index.ts
+export { OrdersModule } from './orders.module';
+export { OrdersService } from './orders.service';
+export { CreateOrderDto } from './dto/create-order.dto';
+export { OrderResponseDto } from './dto/order-response.dto';
+
+// Consuming module imports from barrel
+import { OrdersModule } from '../orders';
 ```
 
-### Directory.Packages.props (Central Package Management)
-
-```xml
-<Project>
-  <PropertyGroup>
-    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <!-- ASP.NET Core -->
-    <PackageVersion Include="Mediator.Abstractions" Version="3.0.0" />
-    <PackageVersion Include="Mediator.SourceGenerator" Version="3.0.0" />
-    <PackageVersion Include="FluentValidation.DependencyInjectionExtensions" Version="12.0.0" />
-
-    <!-- Data -->
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
-
-    <!-- Observability -->
-    <PackageVersion Include="Serilog.AspNetCore" Version="9.0.0" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.10.0" />
-
-    <!-- Testing -->
-    <PackageVersion Include="xunit.v3" Version="1.0.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
-    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.0.0" />
-  </ItemGroup>
-</Project>
-```
-
-### Project File (.csproj) with Central Package Management
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk.Web">
-  <!-- No TargetFramework here — inherited from Directory.Build.props -->
-
-  <ItemGroup>
-    <!-- No Version attribute — managed centrally -->
-    <PackageReference Include="Mediator.Abstractions" />
-    <PackageReference Include="Mediator.SourceGenerator" />
-    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
-    <PackageReference Include="Serilog.AspNetCore" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\MyApp.Domain\MyApp.Domain.csproj" />
-    <ProjectReference Include="..\MyApp.Infrastructure\MyApp.Infrastructure.csproj" />
-  </ItemGroup>
-</Project>
-```
-
-### global.json (SDK Pinning)
+### nest-cli.json Configuration
 
 ```json
 {
-  "sdk": {
-    "version": "10.0.100",
-    "rollForward": "latestFeature"
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "src",
+  "compilerOptions": {
+    "deleteOutDir": true,
+    "plugins": [
+      {
+        "name": "@nestjs/swagger",
+        "options": {
+          "introspectComments": true,
+          "classValidatorShim": true
+        }
+      }
+    ]
   }
 }
 ```
 
-### .slnx Solution Format
+### Nx Monorepo Layout
 
-```xml
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/MyApp.Api/MyApp.Api.csproj" />
-    <Project Path="src/MyApp.Domain/MyApp.Domain.csproj" />
-    <Project Path="src/MyApp.Infrastructure/MyApp.Infrastructure.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/MyApp.Api.Tests/MyApp.Api.Tests.csproj" />
-  </Folder>
-</Solution>
+```
+apps/
+  api/                        # main NestJS app
+    src/
+      app.module.ts
+      main.ts
+  worker/                     # BullMQ worker process
+    src/
+      worker.module.ts
+      main.ts
+libs/
+  shared/
+    src/
+      lib/
+        dto/
+        entities/
+        utils/
+      index.ts                # public API of the lib
+  auth/
+    src/
+      lib/
+        auth.module.ts
+        jwt.strategy.ts
+      index.ts
+nx.json
+workspace.json
 ```
 
-### Naming Conventions
+```bash
+# Generate Nx app
+npx nx generate @nx/nest:app worker
 
-| Element | Convention | Example |
-|---------|-----------|---------|
-| Solution | `CompanyName.AppName` or `AppName` | `MyApp.slnx` |
-| Project | `AppName.Layer` | `MyApp.Api`, `MyApp.Domain` |
-| Namespace | Matches folder path | `MyApp.Api.Features.Orders` |
-| Feature folder | PascalCase, plural | `Features/Orders/` |
-| Test project | `ProjectName.Tests` | `MyApp.Api.Tests` |
+# Generate Nx lib
+npx nx generate @nx/nest:lib auth
+```
 
 ## Anti-patterns
 
-### Don't Scatter Package Versions
-
-```xml
-<!-- BAD — version in every .csproj, version drift -->
-<PackageReference Include="Mediator.Abstractions" Version="2.0.0" />  <!-- in Project A -->
-<PackageReference Include="Mediator.Abstractions" Version="3.0.0" />  <!-- in Project B -->
-
-<!-- GOOD — central management, one version -->
-<!-- Directory.Packages.props: <PackageVersion Include="Mediator.Abstractions" Version="3.0.0" /> -->
-<!-- .csproj: <PackageReference Include="Mediator.Abstractions" /> -->
-```
-
-### Don't Repeat Build Properties
-
-```xml
-<!-- BAD — same properties in every .csproj -->
-<PropertyGroup>
-  <TargetFramework>net10.0</TargetFramework>
-  <Nullable>enable</Nullable>
-  <ImplicitUsings>enable</ImplicitUsings>
-</PropertyGroup>
-
-<!-- GOOD — once in Directory.Build.props, inherited everywhere -->
-```
-
-### Don't Mix Source and Test Projects
+### Layer-First Structure
 
 ```
-# BAD — tests mixed with source
+# BAD — all controllers together, all services together
 src/
-  MyApp.Api/
-  MyApp.Api.Tests/    # test project in src/
+  controllers/
+    orders.controller.ts
+    users.controller.ts
+  services/
+    orders.service.ts
+    users.service.ts
+  entities/
+    order.entity.ts
+    user.entity.ts
 
-# GOOD — clear separation
+# GOOD — feature-first
 src/
-  MyApp.Api/
-tests/
-  MyApp.Api.Tests/
+  orders/
+    orders.controller.ts
+    orders.service.ts
+    entities/order.entity.ts
+  users/
+    users.controller.ts
+    users.service.ts
+    entities/user.entity.ts
+```
+
+### Deep Relative Imports Across Features
+
+```typescript
+// BAD — fragile path, bypasses barrel
+import { OrdersService } from '../../orders/orders.service';
+
+// GOOD — import the module and use DI; or use the barrel
+import { OrdersModule } from '../orders';
+// Then inject OrdersService via NestJS DI after importing OrdersModule
+```
+
+### Shared Business Logic in AppModule
+
+```typescript
+// BAD — AppModule has providers that belong to a feature
+@Module({
+  imports: [TypeOrmModule.forFeature([Order, User])],
+  providers: [OrdersService, UsersService],
+})
+export class AppModule {}
+
+// GOOD — AppModule only imports feature modules
+@Module({
+  imports: [OrdersModule, UsersModule, ConfigModule.forRoot(...)],
+})
+export class AppModule {}
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| New solution | `.slnx` format |
-| Package version management | `Directory.Packages.props` (central) |
-| Shared build settings | `Directory.Build.props` |
-| SDK version pinning | `global.json` |
-| Common using directives | Global usings in `Directory.Build.props` |
-| Small API (1-2 devs) | Single project (`MyApp.Api`) |
-| Medium API (3-5 devs) | 2-3 projects (`Api`, `Domain`, `Infrastructure`) |
-| Large / modular app | Module-per-project with shared `Contracts` |
+|---|---|
+| Single deployable NestJS API | Standard `src/` feature-first layout |
+| Multiple NestJS apps sharing code | Nx monorepo with `apps/` + `libs/` |
+| Shared guards/interceptors/filters | `src/common/` folder, not inside features |
+| Cross-feature DTO sharing | `src/common/dto/` or a shared Nx lib |
+| Growing monolith, extracting services | Feature-first makes extraction straightforward |
+| Barrel export granularity | Export only what other modules need; keep internals private |

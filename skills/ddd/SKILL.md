@@ -1,329 +1,313 @@
 ---
 name: ddd
 description: >
-  Domain-Driven Design tactical patterns for .NET applications. Covers aggregates,
-  aggregate roots, value objects, domain events, domain services, strongly-typed IDs,
-  and repository patterns for aggregate persistence.
-  Load this skill when implementing DDD, working with aggregates, value objects,
-  domain events, bounded contexts, or when the architecture-advisor recommends
-  DDD + Clean Architecture. Pair with the clean-architecture skill.
+  Domain-Driven Design patterns for NestJS. Load this skill when working with
+  aggregates, value objects, domain events, bounded contexts, repository pattern,
+  ubiquitous language, or anemic domain model concerns.
 ---
-
-# Domain-Driven Design (DDD)
 
 ## Core Principles
 
-1. **Aggregates define consistency boundaries** — An aggregate is a cluster of entities and value objects treated as a single unit for data changes. All invariants within an aggregate are enforced in a single transaction. Cross-aggregate consistency is eventual.
-2. **Value objects over primitives** — Replace primitive obsession with value objects. `Money`, `EmailAddress`, `OrderNumber` are not strings — they carry validation, equality, and behavior. Use C# records for immutable value objects.
-3. **Domain events decouple side effects** — When something meaningful happens in the domain (OrderPlaced, PaymentReceived), raise a domain event. Side effects (send email, update read model, notify another aggregate) subscribe to these events. The aggregate stays focused on its own rules.
-4. **Aggregate root is the sole entry point** — External code accesses an aggregate only through its root entity. Child entities are never loaded or modified independently. The root enforces all invariants for the entire aggregate.
-5. **Repositories persist aggregates, not entities** — One repository per aggregate root. The repository loads and saves the entire aggregate as a unit. No repository for child entities. The Infrastructure implementation uses `DbContext` internally — this is a DDD tactical pattern for aggregate boundaries, not a generic CRUD wrapper.
+1. **Aggregates enforce invariants.** The aggregate root is the only entry point for
+   mutations. Use a private constructor and a static `create()` factory that validates
+   business rules before constructing the object.
+
+2. **Value objects are immutable.** They have no identity — equality is structural.
+   Implement `equals()` and expose a static `create()` that validates and constructs.
+
+3. **Domain events decouple side effects.** Emit events from the aggregate root after
+   state changes. Subscribers (email, audit log, projections) react without coupling
+   to the domain layer.
+
+4. **Repository interfaces live in the domain layer.** TypeORM/Prisma implementations
+   live in infrastructure. Domain code never imports ORM types.
+
+5. **The application layer orchestrates.** Services in `application/` call domain
+   objects and repository interfaces. They hold no business logic themselves.
 
 ## Patterns
 
 ### Aggregate Root
 
-The aggregate root owns all access to its children and enforces invariants:
+```typescript
+// src/orders/domain/order.ts
+import { randomUUID } from 'crypto';
+import { OrderItem } from './order-item.value-object';
+import { OrderCreatedEvent } from './events/order-created.event';
 
-```csharp
-// Domain/Orders/Order.cs
-public sealed class Order : AggregateRoot
-{
-    private readonly List<OrderLine> _lines = [];
+export type OrderStatus = 'pending' | 'confirmed' | 'shipped' | 'cancelled';
 
-    private Order() { } // EF Core
+export class Order {
+  private readonly _domainEvents: object[] = [];
 
-    public OrderNumber Number { get; private set; } = null!;
-    public CustomerId CustomerId { get; private set; }
-    public Money Total { get; private set; } = Money.Zero("USD");
-    public OrderStatus Status { get; private set; }
-    public DateTimeOffset PlacedAt { get; private set; }
-    public IReadOnlyList<OrderLine> Lines => _lines.AsReadOnly();
+  private constructor(
+    public readonly id: string,
+    public readonly customerId: string,
+    private _items: OrderItem[],
+    private _status: OrderStatus,
+  ) {}
 
-    public static Order Place(CustomerId customerId, OrderNumber number, DateTimeOffset now)
-    {
-        var order = new Order
-        {
-            Id = Guid.CreateVersion7(),
-            CustomerId = customerId,
-            Number = number,
-            Status = OrderStatus.Placed,
-            PlacedAt = now
-        };
+  static create(customerId: string, items: OrderItem[]): Order {
+    if (!customerId) throw new Error('customerId is required');
+    if (items.length === 0) throw new Error('Order must have at least one item');
 
-        order.RaiseDomainEvent(new OrderPlaced(order.Id, customerId, now));
-        return order;
+    const order = new Order(randomUUID(), customerId, [...items], 'pending');
+    order._domainEvents.push(new OrderCreatedEvent(order.id, customerId));
+    return order;
+  }
+
+  confirm(): void {
+    if (this._status !== 'pending') {
+      throw new Error(`Cannot confirm order in status: ${this._status}`);
     }
+    this._status = 'confirmed';
+  }
 
-    public Result AddLine(ProductId productId, int quantity, Money unitPrice)
-    {
-        if (Status is not OrderStatus.Placed)
-            return Result.Failure("Cannot modify a confirmed or cancelled order");
-
-        if (quantity <= 0)
-            return Result.Failure("Quantity must be positive");
-
-        var existing = _lines.FirstOrDefault(l => l.ProductId == productId);
-        if (existing is not null)
-        {
-            existing.IncreaseQuantity(quantity);
-        }
-        else
-        {
-            _lines.Add(new OrderLine(productId, quantity, unitPrice));
-        }
-
-        RecalculateTotal();
-        return Result.Success();
+  cancel(): void {
+    if (this._status === 'shipped') {
+      throw new Error('Cannot cancel a shipped order');
     }
+    this._status = 'cancelled';
+  }
 
-    public Result Confirm()
-    {
-        if (Status is not OrderStatus.Placed)
-            return Result.Failure("Only placed orders can be confirmed");
+  get status(): OrderStatus { return this._status; }
+  get items(): ReadonlyArray<OrderItem> { return this._items; }
 
-        if (_lines.Count == 0)
-            return Result.Failure("Cannot confirm an order with no lines");
-
-        Status = OrderStatus.Confirmed;
-        RaiseDomainEvent(new OrderConfirmed(Id));
-        return Result.Success();
-    }
-
-    private void RecalculateTotal()
-    {
-        Total = _lines.Aggregate(Money.Zero(Total.Currency), (sum, line) => sum + line.Subtotal);
-    }
+  pullDomainEvents(): object[] {
+    const events = [...this._domainEvents];
+    this._domainEvents.length = 0;
+    return events;
+  }
 }
 ```
 
-### Value Objects as Records
+### Value Object
 
-Use C# records for immutable value objects with structural equality:
+```typescript
+// src/orders/domain/money.value-object.ts
+export class Money {
+  private constructor(
+    public readonly amount: number,
+    public readonly currency: string,
+  ) {}
 
-```csharp
-// Domain/Common/Money.cs
-public sealed record Money
-{
-    public decimal Amount { get; }
-    public string Currency { get; }
+  static create(amount: number, currency: string): Money {
+    if (amount < 0) throw new Error('Amount must be non-negative');
+    if (!currency || currency.length !== 3) throw new Error('Invalid currency code');
+    return new Money(amount, currency.toUpperCase());
+  }
 
-    public Money(decimal amount, string currency)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(amount);
-        ArgumentException.ThrowIfNullOrWhiteSpace(currency);
+  add(other: Money): Money {
+    if (this.currency !== other.currency) throw new Error('Currency mismatch');
+    return Money.create(this.amount + other.amount, this.currency);
+  }
 
-        Amount = amount;
-        Currency = currency.ToUpperInvariant();
-    }
-
-    public static Money Zero(string currency) => new(0, currency);
-
-    public static Money operator +(Money left, Money right)
-    {
-        if (left.Currency != right.Currency)
-            throw new InvalidOperationException($"Cannot add {left.Currency} and {right.Currency}");
-        return new Money(left.Amount + right.Amount, left.Currency);
-    }
-}
-
-// Other value objects (EmailAddress, OrderNumber, etc.) follow the same pattern:
-// sealed record, constructor validation, no public setters
-```
-
-### Strongly-Typed IDs with EF Core Converters
-
-Prevent mixing up GUIDs from different entities:
-
-```csharp
-// Domain/Common/StronglyTypedId.cs
-public readonly record struct CustomerId(Guid Value)
-{
-    public static CustomerId New() => new(Guid.CreateVersion7());
-    public override string ToString() => Value.ToString();
-}
-
-public readonly record struct ProductId(Guid Value)
-{
-    public static ProductId New() => new(Guid.CreateVersion7());
-}
-
-public readonly record struct OrderNumber(string Value)
-{
-    public override string ToString() => Value;
-}
-
-// Infrastructure/Persistence/Configurations/OrderConfiguration.cs
-public class OrderConfiguration : IEntityTypeConfiguration<Order>
-{
-    public void Configure(EntityTypeBuilder<Order> builder)
-    {
-        builder.HasKey(o => o.Id);
-
-        builder.Property(o => o.CustomerId)
-            .HasConversion(id => id.Value, value => new CustomerId(value));
-
-        builder.Property(o => o.Number)
-            .HasConversion(n => n.Value, value => new OrderNumber(value))
-            .HasMaxLength(50);
-
-        builder.ComplexProperty(o => o.Total, money =>
-        {
-            money.Property(m => m.Amount).HasColumnName("Total").HasPrecision(18, 2);
-            money.Property(m => m.Currency).HasColumnName("Currency").HasMaxLength(3);
-        });
-
-        builder.HasMany(o => o.Lines).WithOne().HasForeignKey("OrderId");
-        builder.Navigation(o => o.Lines).AutoInclude();
-    }
+  equals(other: Money): boolean {
+    return this.amount === other.amount && this.currency === other.currency;
+  }
 }
 ```
 
-### Domain Event Dispatching
+### Domain Events via EventEmitter2
 
-Raise events in the aggregate, dispatch in SaveChangesAsync:
-
-```csharp
-// Domain/Common/AggregateRoot.cs
-public abstract class AggregateRoot : Entity
-{
-    private readonly List<IDomainEvent> _domainEvents = [];
-
-    public IReadOnlyList<IDomainEvent> DomainEvents => _domainEvents.AsReadOnly();
-
-    protected void RaiseDomainEvent(IDomainEvent domainEvent) => _domainEvents.Add(domainEvent);
-
-    public void ClearDomainEvents() => _domainEvents.Clear();
+```typescript
+// src/orders/domain/events/order-created.event.ts
+export class OrderCreatedEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly customerId: string,
+    public readonly occurredAt: Date = new Date(),
+  ) {}
 }
 
-public interface IDomainEvent : INotification
-{
-    DateTimeOffset OccurredAt { get; }
+// src/notifications/application/order-created.handler.ts
+import { OnEvent } from '@nestjs/event-emitter';
+import { Injectable } from '@nestjs/common';
+import { OrderCreatedEvent } from '../../orders/domain/events/order-created.event';
+
+@Injectable()
+export class OrderCreatedHandler {
+  @OnEvent(OrderCreatedEvent.name, { async: true })
+  async handle(event: OrderCreatedEvent): Promise<void> {
+    // send confirmation email, update read model, etc.
+  }
 }
 
-// Domain/Orders/Events/OrderPlaced.cs
-public sealed record OrderPlaced(Guid OrderId, CustomerId CustomerId, DateTimeOffset PlacedAt) : IDomainEvent
-{
-    public DateTimeOffset OccurredAt => PlacedAt;
-}
+// src/orders/application/create-order.service.ts
+import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { OrderRepository } from '../domain/order.repository';
+import { Order } from '../domain/order';
 
-// Infrastructure/Persistence/AppDbContext.cs
-public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
-{
-    var aggregates = ChangeTracker.Entries<AggregateRoot>()
-        .Where(e => e.Entity.DomainEvents.Count > 0)
-        .Select(e => e.Entity)
-        .ToList();
+@Injectable()
+export class CreateOrderService {
+  constructor(
+    private readonly orderRepository: OrderRepository,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
-    var events = aggregates.SelectMany(a => a.DomainEvents).ToList();
+  async execute(customerId: string, items: OrderItem[]): Promise<string> {
+    const order = Order.create(customerId, items);
+    await this.orderRepository.save(order);
 
-    var result = await base.SaveChangesAsync(ct);
+    const events = order.pullDomainEvents();
+    for (const event of events) {
+      await this.eventEmitter.emitAsync(event.constructor.name, event);
+    }
 
-    foreach (var @event in events)
-        await _publisher.Publish(@event, ct);
-
-    foreach (var aggregate in aggregates)
-        aggregate.ClearDomainEvents();
-
-    return result;
+    return order.id;
+  }
 }
 ```
 
-### Domain Services
+### Repository Interface in Domain, Implementation in Infrastructure
 
-For logic that does not belong to a single aggregate:
+```typescript
+// src/orders/domain/order.repository.ts
+import { Order } from './order';
 
-```csharp
-// Domain/Orders/Services/PricingService.cs
-// Coordinates logic across aggregates — takes domain interfaces, returns value objects
-public sealed class PricingService(IDiscountPolicy discountPolicy)
-{
-    public Money CalculatePrice(ProductId productId, int quantity, Money unitPrice, CustomerId customerId)
-    {
-        var subtotal = new Money(unitPrice.Amount * quantity, unitPrice.Currency);
-        var discount = discountPolicy.GetDiscount(customerId, productId, quantity);
-        return new Money(subtotal.Amount * (1 - discount), subtotal.Currency);
-    }
+export abstract class OrderRepository {
+  abstract findById(id: string): Promise<Order | null>;
+  abstract save(order: Order): Promise<void>;
+  abstract delete(id: string): Promise<void>;
 }
+
+// src/orders/infrastructure/typeorm-order.repository.ts
+@Injectable()
+export class TypeOrmOrderRepository extends OrderRepository {
+  constructor(
+    @InjectRepository(OrderEntity)
+    private readonly repo: Repository<OrderEntity>,
+    private readonly mapper: OrderMapper,
+  ) { super(); }
+
+  async findById(id: string): Promise<Order | null> {
+    const entity = await this.repo.findOne({ where: { id }, relations: ['items'] });
+    return entity ? this.mapper.toDomain(entity) : null;
+  }
+
+  async save(order: Order): Promise<void> {
+    await this.repo.save(this.mapper.toEntity(order));
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.repo.delete(id);
+  }
+}
+
+// orders.module.ts — bind interface to implementation
+@Module({
+  imports: [TypeOrmModule.forFeature([OrderEntity])],
+  providers: [
+    { provide: OrderRepository, useClass: TypeOrmOrderRepository },
+    OrderMapper,
+    CreateOrderService,
+  ],
+  exports: [CreateOrderService],
+})
+export class OrdersModule {}
+```
+
+### DDD Folder Structure
+
+```
+src/
+  orders/
+    domain/
+      order.ts
+      order-item.value-object.ts
+      money.value-object.ts
+      order.repository.ts        # abstract interface only
+      events/
+        order-created.event.ts
+    application/
+      create-order.service.ts
+      cancel-order.service.ts
+      dtos/
+        create-order.dto.ts
+    infrastructure/
+      typeorm-order.repository.ts
+      order.entity.ts
+      order.mapper.ts
+    presentation/
+      orders.controller.ts
+    orders.module.ts
 ```
 
 ## Anti-patterns
 
-### Oversized Aggregates
+### Anemic Domain Model
 
-```csharp
-// BAD — Customer aggregate owns everything the customer touches
-public class Customer : AggregateRoot
-{
-    public List<Order> Orders { get; } = [];        // should be separate aggregate
-    public List<Payment> Payments { get; } = [];     // should be separate aggregate
-    public List<Address> Addresses { get; } = [];    // might be OK as child
-    public ShoppingCart Cart { get; set; }            // should be separate aggregate
+```typescript
+// BAD — Order is just a data bag; logic scattered in services
+export class Order {
+  id: string;
+  status: string;
+  items: OrderItem[];
 }
 
-// GOOD — small, focused aggregates linked by ID
-public class Customer : AggregateRoot
-{
-    public CustomerName Name { get; private set; }
-    public EmailAddress Email { get; private set; }
-    // Orders, Payments, Cart are separate aggregates referencing CustomerId
+@Injectable()
+export class OrderService {
+  confirm(order: Order): void {
+    if (order.status !== 'pending') throw new Error('...');
+    order.status = 'confirmed';
+  }
+}
+
+// GOOD — aggregate enforces its own invariants
+export class Order {
+  confirm(): void {
+    if (this._status !== 'pending') throw new Error('...');
+    this._status = 'confirmed';
+  }
 }
 ```
 
-### Domain Events for Intra-Aggregate Logic
+### Business Logic in Controllers
 
-```csharp
-// BAD — using events for logic within the same aggregate
-order.RaiseDomainEvent(new OrderLineAdded(line));
-// Then a handler recalculates the total... but you're in the same aggregate!
-
-// GOOD — just call the method directly within the aggregate
-_lines.Add(line);
-RecalculateTotal();  // private method, no event needed
-```
-
-### Value Objects with Identity
-
-```csharp
-// BAD — value object with an Id (it's an entity then!)
-public record Address
-{
-    public Guid Id { get; init; }  // value objects don't have identity
-    public string Street { get; init; }
+```typescript
+// BAD
+@Post()
+async create(@Body() dto: CreateOrderDto) {
+  if (dto.items.length === 0) throw new BadRequestException('No items');
+  const total = dto.items.reduce((s, i) => s + i.price * i.qty, 0);
+  if (total > 10000) throw new BadRequestException('Order too large');
+  return this.repo.save({ ...dto, total });
 }
 
-// GOOD — value objects are defined by their attributes, not an Id
-public record Address(string Street, string City, string PostalCode, string Country);
+// GOOD — controller delegates; domain enforces
+@Post()
+async create(@Body() dto: CreateOrderDto) {
+  const id = await this.createOrderService.execute(dto.customerId, dto.items);
+  return { id };
+}
 ```
 
-### Anemic Aggregates
+### TypeORM Entities Exposed Directly to Controllers
 
-```csharp
-// BAD — aggregate is just a data bag, service does all the work
-public class Order : AggregateRoot
-{
-    public OrderStatus Status { get; set; }  // public setter!
-    public List<OrderLine> Lines { get; set; } = [];
+```typescript
+// BAD — leaks DB schema, breaks encapsulation
+@Get(':id')
+findOne(@Param('id') id: string): Promise<OrderEntity> {
+  return this.repo.findOne({ where: { id } });
 }
 
-// Service directly manipulates order state
-order.Status = OrderStatus.Confirmed;  // no invariant check!
-order.Lines.Add(newLine);              // no validation!
-
-// GOOD — aggregate encapsulates rules (see Aggregate Root pattern above)
-order.Confirm();  // validates status, raises event
-order.AddLine(productId, quantity, unitPrice);  // validates, recalculates
+// GOOD — map to response DTO
+@Get(':id')
+async findOne(@Param('id') id: string): Promise<OrderResponseDto> {
+  const order = await this.findOrderService.execute(id);
+  return OrderResponseDto.fromDomain(order);
+}
 ```
 
 ## Decision Guide
 
 | Scenario | Recommendation |
-|----------|---------------|
-| When to use DDD | Complex domain with business rules that go beyond CRUD |
-| When to use value objects | Any concept with validation rules or equality based on attributes, not identity |
-| Aggregate size | Keep small — typically 1 root entity + 0-3 child entities. Load the whole aggregate every time |
-| Domain events vs integration events | Domain events: within bounded context, same transaction. Integration events: cross-context, via message bus |
-| Strongly-typed IDs | Always for aggregate root IDs that cross boundaries. Optional for child entity IDs |
-| When NOT to use DDD | Simple CRUD, settings, audit logs, read models — use plain entities |
-| Repository vs DbContext | Repository per aggregate root for complex aggregates; IAppDbContext for simpler queries |
-| Domain services | Only when logic requires multiple aggregates or external data the aggregate should not know about |
+|---|---|
+| Simple CRUD, no business rules | Feature Modules + thin service, skip full DDD |
+| Multiple invariants on one entity | Aggregate root with private constructor |
+| Shared concept across modules | Value object (Money, Email, Address) |
+| Side effect after state change | Domain event + @OnEvent handler |
+| Swapping ORM later is a concern | Repository interface in domain layer |
+| Complex reads (dashboards, reports) | Skip repository, query DB directly in application layer |
+| Cross-aggregate coordination | Application service orchestrates both aggregates |
