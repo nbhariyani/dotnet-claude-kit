@@ -1,69 +1,58 @@
 # Codex Agent Configuration
 
-This project uses [dotnet-claude-kit](https://github.com/codewithmukesh/dotnet-claude-kit) for .NET development intelligence.
+This project uses `nestjs-claude-kit` for NestJS and TypeScript development guidance.
 
 ## Available Agents
 
 | Agent | File | When to Use |
 |-------|------|-------------|
-| dotnet-architect | `agents/dotnet-architect.md` | Architecture decisions, project structure, module boundaries, feature scaffolding |
-| api-designer | `agents/api-designer.md` | Minimal API design, OpenAPI specs, versioning, rate limiting, CORS |
-| ef-core-specialist | `agents/ef-core-specialist.md` | Database design, EF Core queries, migrations, DbContext configuration |
-| test-engineer | `agents/test-engineer.md` | Test strategy, xUnit v3, WebApplicationFactory, Testcontainers |
-| security-auditor | `agents/security-auditor.md` | Auth systems, OWASP compliance, secrets management, vulnerability review |
-| performance-analyst | `agents/performance-analyst.md` | Profiling, benchmarks, caching strategy, async pattern optimization |
-| devops-engineer | `agents/devops-engineer.md` | Docker, CI/CD pipelines, .NET Aspire orchestration, deployment |
-| code-reviewer | `agents/code-reviewer.md` | Multi-dimensional code review, PR review, quality gatekeeper |
-| build-error-resolver | `agents/build-error-resolver.md` | Autonomous build error fixing, iterative compilation repair |
+| nestjs-architect | `agents/nestjs-architect.md` | Architecture decisions, project structure, module boundaries, feature scaffolding |
+| api-designer | `agents/api-designer.md` | Controller design, OpenAPI, versioning, rate limiting, CORS, guards, pipes |
+| orm-specialist | `agents/orm-specialist.md` | Database design, TypeORM and Prisma queries, migrations, repository and data access patterns |
+| test-engineer | `agents/test-engineer.md` | Test strategy, Jest, SuperTest, Testcontainers, e2e coverage |
+| security-auditor | `agents/security-auditor.md` | Auth systems, authorization, OWASP concerns, secrets management, security review |
+| performance-analyst | `agents/performance-analyst.md` | Profiling, memory usage, caching strategy, async and query optimization |
+| devops-engineer | `agents/devops-engineer.md` | Docker, CI/CD pipelines, deployment, container publishing |
+| code-reviewer | `agents/code-reviewer.md` | Multi-dimensional code review, PR review, consistency and risk analysis |
+| build-error-resolver | `agents/build-error-resolver.md` | Autonomous TypeScript and build error fixing, iterative repair loops |
 | refactor-cleaner | `agents/refactor-cleaner.md` | Dead code removal, systematic cleanup, safe refactoring |
 
 ## Skills
 
 Skills live in `skills/<skill-name>/SKILL.md` and follow the Agent Skills open standard.
 
-### .NET Domain Skills
-api-versioning, architecture-advisor, aspire, authentication, caching, ci-cd, clean-architecture, configuration, ddd, dependency-injection, docker, ef-core, error-handling, httpclient-factory, logging, messaging, minimal-api, modern-csharp, openapi, opentelemetry, project-setup, project-structure, resilience, scaffolding, scalar, serilog, testing, vertical-slice, container-publish
+### NestJS Domain Skills
+api-versioning, architecture-advisor, authentication, caching, ci-cd, clean-architecture, configuration, controllers, ddd, dependency-injection, docker, error-handling, feature-modules, guards, httpclient, interceptors, messaging, migration-workflow, modern-typescript, openapi, performance, pipes, pino-logging, prisma, project-setup, project-structure, resilience, scaffolding, scalar, security-scan, swagger-ui, testing, typeorm, validation, verification-loop, container-publish
 
 ### Workflow Skills
-code-review-workflow, convention-learner, migration-workflow, verification-loop, workflow-mastery
+code-review-workflow, convention-learner, verification-loop, workflow-mastery
 
-### Meta & Productivity Skills
-80-20-review, context-discipline, learning-log, model-selection, self-correction-loop, split-memory, wrap-up-ritual
+### Meta and Productivity Skills
+80-20-review, autonomous-loops, context-discipline, learning-log, model-selection, self-correction-loop, session-management, split-memory, wrap-up-ritual
 
 ## MCP Tools
 
-The `cwm-roslyn-navigator` MCP server provides Roslyn-powered code intelligence:
+The `cwm-ts-navigator` MCP server provides TypeScript-oriented code intelligence:
 
 | Tool | Purpose |
 |------|---------|
-| `find_symbol` | Locate where a type, method, or property is defined |
-| `find_references` | Find all usages of a symbol across the solution |
-| `find_implementations` | Find types implementing an interface or deriving from a base class |
-| `find_callers` | Find all methods calling a specific method |
-| `find_overrides` | Find overrides of virtual/abstract methods |
-| `find_dead_code` | Identify unused types, methods, and properties |
-| `get_symbol_detail` | Get full signature, parameters, return type, XML docs |
-| `get_public_api` | Get public members of a type without reading the file |
-| `get_type_hierarchy` | Get inheritance chain, interfaces, and derived types |
-| `get_project_graph` | Get solution dependency tree with frameworks and references |
-| `get_dependency_graph` | Get recursive call graph for a method |
-| `get_diagnostics` | Get compiler and analyzer diagnostics (errors, warnings) |
-| `get_test_coverage_map` | Heuristic test coverage by naming convention |
-| `detect_antipatterns` | Find .NET anti-patterns via Roslyn analysis |
-| `detect_circular_dependencies` | Find cycles in project or type dependencies |
+| `find_symbol` | Locate where a type, class, method, or function is defined |
+| `find_references` | Find all usages of a symbol across the project |
+| `find_implementations` | Find types implementing an interface |
+| `find_callers` | Find call sites for a function or method |
+| `get_public_api` | Get exported or public members without reading the whole file |
+| `get_type_hierarchy` | Get inheritance and implementation relationships |
+| `get_module_graph` | Get module dependency structure and import relationships |
+| `get_dependency_graph` | Get recursive dependency flow for a symbol |
+| `get_diagnostics` | Get TypeScript compiler diagnostics |
+| `get_test_coverage_map` | Heuristic map of files to tests |
+| `find_dead_code` | Identify likely unused exports or unreachable code |
+| `detect_circular_deps` | Find circular module dependencies |
 
-Always prefer MCP tools over reading full source files to conserve context window.
+Always prefer MCP tools over reading full source files when they can answer the question cleanly.
 
 ## Rules
 
-Always-applied coding conventions live in `rules/dotnet/`:
+Always-applied editor conventions live in `.cursor/rules/`:
 
-- `coding-style.md` -- C# 14 style, naming, file organization
-- `architecture.md` -- Dependency direction, feature folders, data access
-- `security.md` -- Secrets, input validation, auth, transport security
-- `testing.md` -- Integration-first, xUnit v3, Testcontainers, AAA
-- `performance.md` -- CancellationToken, TimeProvider, caching, async
-- `error-handling.md` -- Result pattern, ProblemDetails, exception boundaries
-- `git-workflow.md` -- Conventional commits, atomic commits, branch safety
-- `agents.md` -- MCP-first tools, subagent routing, skill loading
-- `hooks.md` -- Format hooks, pre-commit, post-test analysis
+- `nestjs-rules.md` -- NestJS and TypeScript coding, architecture, testing, security, tooling, and workflow rules
