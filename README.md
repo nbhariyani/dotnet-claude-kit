@@ -416,12 +416,3 @@ dotnet-claude-kit works with multiple AI coding tools:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add skills, agents, commands, rules, knowledge, templates, and MCP tools.
 
-## License
-
-[MIT](LICENSE)
-
----
-
-<p align="center">
-  Built by <a href="https://codewithmukesh.com">Mukesh Murugan</a> &bull; Powered by Claude Code
-</p>
