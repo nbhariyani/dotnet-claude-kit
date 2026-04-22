@@ -15,7 +15,7 @@ export class ProjectManager {
   }
 
   private findTsconfig(): string {
-    let dir = process.cwd();
+    let dir = process.env['workspaceFolder'] ?? process.cwd();
     for (let i = 0; i < 10; i++) {
       const candidate = path.join(dir, 'tsconfig.json');
       if (fs.existsSync(candidate)) {
@@ -26,7 +26,7 @@ export class ProjectManager {
       dir = parent;
     }
     // Return a default path — initialize() will handle the missing file gracefully
-    return path.join(process.cwd(), 'tsconfig.json');
+    return path.join(process.env['workspaceFolder'] ?? process.cwd(), 'tsconfig.json');
   }
 
   private initialize(): void {

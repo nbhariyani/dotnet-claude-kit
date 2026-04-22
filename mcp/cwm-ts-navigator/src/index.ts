@@ -40,7 +40,12 @@ const ALL_TOOLS = [
 function parseTsconfigArg(): string | undefined {
   const idx = process.argv.indexOf('--tsconfig');
   if (idx !== -1 && process.argv[idx + 1]) {
-    return process.argv[idx + 1];
+    let tsconfigPath = process.argv[idx + 1];
+    if (tsconfigPath.includes('${workspaceFolder}')) {
+      const workspaceFolder = process.env['workspaceFolder'] ?? process.cwd();
+      tsconfigPath = tsconfigPath.replace('${workspaceFolder}', workspaceFolder);
+    }
+    return tsconfigPath;
   }
   return undefined;
 }
