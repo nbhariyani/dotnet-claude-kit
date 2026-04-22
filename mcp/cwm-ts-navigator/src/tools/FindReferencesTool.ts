@@ -72,7 +72,7 @@ export const FindReferencesTool = {
         return JSON.stringify({ found: false, symbolName: args.symbolName, message: 'Symbol declaration not found.' });
       }
 
-      const referencedSymbols = declarationNode.findReferencesAsNodes();
+      const referencedSymbols = (declarationNode as any).findReferencesAsNodes() as import('ts-morph').Node[];
 
       for (const ref of referencedSymbols) {
         const sf = ref.getSourceFile();

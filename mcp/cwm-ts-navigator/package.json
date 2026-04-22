@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "description": "TypeScript code navigation MCP server for NestJS projects",
   "main": "dist/index.js",
-  "bin": { "cwm-ts-navigator": "dist/index.js" },
+  "bin": {
+    "cwm-ts-navigator": "dist/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
@@ -15,11 +17,11 @@
     "ts-morph": "latest"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest",
-    "tsx": "latest",
-    "jest": "latest",
     "@types/jest": "latest",
-    "ts-jest": "latest"
+    "@types/node": "^25.6.0",
+    "jest": "latest",
+    "ts-jest": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
   }
 }

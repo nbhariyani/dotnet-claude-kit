@@ -67,7 +67,7 @@ export const FindCallersTool = {
         return JSON.stringify({ found: false, methodName: args.methodName, message: 'Method declaration not found.' });
       }
 
-      const refs = methodNode.findReferencesAsNodes();
+      const refs = (methodNode as any).findReferencesAsNodes() as import('ts-morph').Node[];
 
       for (const ref of refs) {
         const sf = ref.getSourceFile();

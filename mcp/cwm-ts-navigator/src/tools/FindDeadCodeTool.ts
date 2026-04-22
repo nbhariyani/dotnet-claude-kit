@@ -87,7 +87,7 @@ export const FindDeadCodeTool = {
 
             if (!name || !nameNode) continue;
 
-            const refs = nameNode.findReferencesAsNodes();
+            const refs = (nameNode as any).findReferencesAsNodes() as import('ts-morph').Node[];
             // Filter out self-reference (the declaration itself)
             const externalRefs = refs.filter((r) => r !== nameNode && r.getSourceFile() !== sf || r.getSourceFile() === sf && r.getStartLineNumber() !== nameNode!.getStartLineNumber());
 

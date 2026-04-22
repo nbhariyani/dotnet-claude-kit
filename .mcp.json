@@ -1,7 +1,9 @@
 {
   "mcpServers": {
-    "cwm-roslyn-navigator": {
-      "command": "cwm-roslyn-navigator"
+    "cwm-ts-navigator": {
+      "command": "cwm-ts-navigator",
+      "args": ["--tsconfig", "${workspaceFolder}/tsconfig.json"],
+      "env": {}
     }
   }
 }
